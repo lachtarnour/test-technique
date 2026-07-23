@@ -1,3 +1,7 @@
 datasets
 torch
-transformers
+transformers>=4.43.1,<5.0.0
+accelerate
+trl>=0.23.0,<0.30.0
+peft
+tqdm

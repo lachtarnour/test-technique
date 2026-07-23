@@ -3,23 +3,20 @@
 from __future__ import annotations
 
 import re
+import time
 from collections.abc import Mapping
-from math import sqrt
 from typing import TYPE_CHECKING, Any
 
-from src.config import DEFAULT_EVALUATION_SPLIT
+from src.config import DEFAULT_EVALUATION_SPLIT, DEFAULT_SEED, SYSTEM_PROMPT
 
 if TYPE_CHECKING:
     from datasets import Dataset
 else:
     Dataset = Any
 
-ANSWER_PATTERN = re.compile(r"####\s*(-?[\d,]+(?:\.\d+)?)")
-NUMBER_PATTERN = re.compile(r"-?[\d,]+(?:\.\d+)?")
-DEFAULT_PROMPT_TEMPLATE = (
-    "Solve the following math problem. Show your reasoning, then write the "
-    "final answer as: #### <number>.\n\nQuestion: {question}\n\nAnswer:"
-)
+NUMERIC_VALUE_PATTERN = r"-?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?"
+ANSWER_PATTERN = re.compile(rf"####\s*({NUMERIC_VALUE_PATTERN})")
+NUMBER_PATTERN = re.compile(NUMERIC_VALUE_PATTERN)
 
 
 def extract_final_answer(
@@ -41,20 +38,8 @@ def extract_final_answer(
     try:
         number = float(answer)
     except ValueError:
-        return answer
+        return None
     return str(int(number)) if number.is_integer() else str(number)
-
-
-def _absolute_difference(
-    prediction: str | None, reference: str | None
-) -> float | None:
-    """Return the absolute numerical error, if both answers are valid."""
-    if prediction is None or reference is None:
-        return None
-    try:
-        return abs(float(prediction) - float(reference))
-    except ValueError:
-        return None
 
 
 def _model_device(model: Any) -> Any:
@@ -77,15 +62,10 @@ def evaluate_model(
     dataset: Dataset,
     *,
     batch_size: int = 4,
-    max_new_tokens: int = 256,
-    prompt_template: str = DEFAULT_PROMPT_TEMPLATE,
+    max_new_tokens: int = 512,
     generation_kwargs: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Evaluate an already loaded model.
-
-    Keeping model loading outside this function makes it reusable for both the
-    original pretrained model and every fine-tuning checkpoint.
-    """
+    """Measure exact match on final numerical GSM8K answers."""
     if batch_size <= 0:
         raise ValueError("batch_size must be strictly positive.")
     if max_new_tokens <= 0:
@@ -108,23 +88,38 @@ def evaluate_model(
     options = {
         "do_sample": False,
         "pad_token_id": tokenizer.pad_token_id,
+        "eos_token_id": tokenizer.eos_token_id,
+        "temperature": None,
+        "top_p": None,
+        "top_k": None,
         **(generation_kwargs or {}),
     }
     predictions: list[dict[str, Any]] = []
     correct = 0
-    squared_errors: list[float] = []
+    valid_predictions = 0
+    format_compliant_predictions = 0
 
-    for start in range(0, len(dataset), batch_size):
+    from tqdm.auto import tqdm
+
+    started_at = time.perf_counter()
+    starts = range(0, len(dataset), batch_size)
+    for start in tqdm(starts, desc="Evaluating GSM8K", unit="batch"):
         batch = dataset[start : start + batch_size]
-        prompts = [
-            prompt_template.format(question=question)
+        conversations = [
+            [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": question},
+            ]
             for question in batch["question"]
         ]
-        encoded = tokenizer(
-            prompts,
+        encoded = tokenizer.apply_chat_template(
+            conversations,
+            tokenize=True,
+            add_generation_prompt=True,
             padding=True,
             truncation=True,
             return_tensors="pt",
+            return_dict=True,
         )
         encoded = {name: tensor.to(device) for name, tensor in encoded.items()}
 
@@ -147,17 +142,15 @@ def evaluate_model(
         for question, reference_text, generated_text in zip(
             batch["question"], batch["answer"], generated_texts, strict=True
         ):
-            prediction = extract_final_answer(generated_text)
-            reference = extract_final_answer(reference_text)
-            is_correct = prediction == reference and reference is not None
-            absolute_difference = _absolute_difference(prediction, reference)
-            squared_error = (
-                absolute_difference**2
-                if absolute_difference is not None
-                else None
+            marked_prediction = extract_final_answer(generated_text)
+            prediction = marked_prediction or extract_final_answer(
+                generated_text,
+                require_marker=False,
             )
-            if squared_error is not None:
-                squared_errors.append(squared_error)
+            reference = extract_final_answer(reference_text)
+            is_correct = prediction is not None and prediction == reference
+            valid_predictions += int(prediction is not None)
+            format_compliant_predictions += int(marked_prediction is not None)
             correct += int(is_correct)
             predictions.append(
                 {
@@ -166,24 +159,23 @@ def evaluate_model(
                     "reference": reference,
                     "generated_text": generated_text,
                     "correct": is_correct,
-                    "absolute_difference": absolute_difference,
-                    "squared_error": squared_error,
+                    "format_compliant": marked_prediction is not None,
                 }
             )
 
     total = len(predictions)
-    valid_predictions = len(squared_errors)
+    elapsed_seconds = time.perf_counter() - started_at
     return {
-        "rmse": (
-            sqrt(sum(squared_errors) / valid_predictions)
-            if valid_predictions
-            else None
-        ),
+        "exact_match": correct / total,
         "accuracy": correct / total,
         "correct": correct,
         "total": total,
         "valid_predictions": valid_predictions,
         "valid_prediction_rate": valid_predictions / total,
+        "format_compliant_predictions": format_compliant_predictions,
+        "format_compliance_rate": format_compliant_predictions / total,
+        "elapsed_seconds": elapsed_seconds,
+        "samples_per_second": total / elapsed_seconds,
         "predictions": predictions,
     }
 
@@ -194,21 +186,38 @@ def evaluate_pretrained_model(
     dataset: Dataset | None = None,
     split: str = DEFAULT_EVALUATION_SPLIT,
     subset_size: int | None = None,
+    seed: int = DEFAULT_SEED,
     model_kwargs: Mapping[str, Any] | None = None,
     **evaluation_kwargs: Any,
 ) -> dict[str, Any]:
     """Load and evaluate a pretrained Hugging Face causal language model."""
-    from transformers import AutoModelForCausalLM, AutoTokenizer
-    from src.data import load_gsm8k_dataset
+    import torch
+    from transformers import AutoModelForCausalLM
+    from src.load_data import load_gsm8k_dataset
+    from src.tokenizer import load_tokenizer
 
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    tokenizer = load_tokenizer(model_name, padding_side="left")
+    dtype = (
+        torch.bfloat16
+        if torch.cuda.is_available() and torch.cuda.is_bf16_supported()
+        else torch.float16
+        if torch.cuda.is_available()
+        else "auto"
+    )
+    loading_options = {"dtype": dtype, "device_map": "auto"}
+    loading_options.update(model_kwargs or {})
     model = AutoModelForCausalLM.from_pretrained(
-        model_name, **(model_kwargs or {})
+        model_name,
+        **loading_options,
     )
     evaluation_dataset = (
         dataset
         if dataset is not None
-        else load_gsm8k_dataset(split=split, subset_size=subset_size)
+        else load_gsm8k_dataset(
+            split=split,
+            subset_size=subset_size,
+            seed=seed,
+        )
     )
     return evaluate_model(
         model, tokenizer, evaluation_dataset, **evaluation_kwargs
@@ -221,24 +230,41 @@ def evaluate_checkpoint(
     dataset: Dataset | None = None,
     split: str = DEFAULT_EVALUATION_SPLIT,
     subset_size: int | None = None,
+    seed: int = DEFAULT_SEED,
     tokenizer_path: str | None = None,
     model_kwargs: Mapping[str, Any] | None = None,
     **evaluation_kwargs: Any,
 ) -> dict[str, Any]:
-    """Load and evaluate a full Hugging Face fine-tuning checkpoint."""
-    from transformers import AutoModelForCausalLM, AutoTokenizer
-    from src.data import load_gsm8k_dataset
+    """Load and evaluate a saved LoRA adapter checkpoint."""
+    import torch
+    from peft import AutoPeftModelForCausalLM
+    from transformers import AutoTokenizer
+    from src.load_data import load_gsm8k_dataset
 
     tokenizer = AutoTokenizer.from_pretrained(
         tokenizer_path or checkpoint_path
     )
-    model = AutoModelForCausalLM.from_pretrained(
-        checkpoint_path, **(model_kwargs or {})
+    dtype = (
+        torch.bfloat16
+        if torch.cuda.is_available() and torch.cuda.is_bf16_supported()
+        else torch.float16
+        if torch.cuda.is_available()
+        else "auto"
+    )
+    loading_options = {"dtype": dtype, "device_map": "auto"}
+    loading_options.update(model_kwargs or {})
+    model = AutoPeftModelForCausalLM.from_pretrained(
+        checkpoint_path,
+        **loading_options,
     )
     evaluation_dataset = (
         dataset
         if dataset is not None
-        else load_gsm8k_dataset(split=split, subset_size=subset_size)
+        else load_gsm8k_dataset(
+            split=split,
+            subset_size=subset_size,
+            seed=seed,
+        )
     )
     return evaluate_model(
         model, tokenizer, evaluation_dataset, **evaluation_kwargs

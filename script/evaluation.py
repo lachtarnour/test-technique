@@ -11,25 +11,30 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from src.config import DEFAULT_SEED, MODEL_NAME
 from src.evaluation import evaluate_pretrained_model
-
-DEFAULT_MODEL_NAME = "HuggingFaceTB/SmolLM2-135M-Instruct"
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Evaluate a pretrained causal language model on GSM8K."
     )
-    parser.add_argument("--model-name", default=DEFAULT_MODEL_NAME)
+    parser.add_argument("--model-name", default=MODEL_NAME)
     parser.add_argument("--split", default="test")
     parser.add_argument(
         "--subset-size",
         type=int,
-        default=10,
-        help="Number of examples to evaluate (default: 10).",
+        default=100,
+        help="Number of examples to evaluate (default: 100).",
     )
-    parser.add_argument("--batch-size", type=int, default=1)
-    parser.add_argument("--max-new-tokens", type=int, default=256)
+    parser.add_argument("--batch-size", type=int, default=4)
+    parser.add_argument("--max-new-tokens", type=int, default=512)
+    parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
+    parser.add_argument(
+        "--output-file",
+        type=Path,
+        default=Path("outputs/baseline_results.json"),
+    )
     return parser.parse_args()
 
 
@@ -39,20 +44,36 @@ def main() -> None:
         args.model_name,
         split=args.split,
         subset_size=args.subset_size,
+        seed=args.seed,
         batch_size=args.batch_size,
         max_new_tokens=args.max_new_tokens,
     )
 
-    summary = {
+    report = {
         "model": args.model_name,
         "split": args.split,
-        "rmse": results["rmse"],
-        "accuracy": results["accuracy"],
+        "subset_size": args.subset_size,
+        "seed": args.seed,
+        "batch_size": args.batch_size,
+        "max_new_tokens": args.max_new_tokens,
+        "exact_match": results["exact_match"],
+        "correct": results["correct"],
         "valid_predictions": results["valid_predictions"],
         "valid_prediction_rate": results["valid_prediction_rate"],
+        "format_compliance_rate": results["format_compliance_rate"],
+        "elapsed_seconds": results["elapsed_seconds"],
+        "samples_per_second": results["samples_per_second"],
         "total": results["total"],
+        "predictions": results["predictions"],
     }
+    args.output_file.parent.mkdir(parents=True, exist_ok=True)
+    args.output_file.write_text(
+        json.dumps(report, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    summary = {key: value for key, value in report.items() if key != "predictions"}
     print(json.dumps(summary, indent=2, ensure_ascii=False))
+    print(f"Full results saved to {args.output_file}")
 
 
 if __name__ == "__main__":

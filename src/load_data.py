@@ -1,4 +1,4 @@
-"""Load and inspect the GSM8K dataset before fine-tuning."""
+"""Load and inspect the raw GSM8K dataset before fine-tuning."""
 
 from __future__ import annotations
 
