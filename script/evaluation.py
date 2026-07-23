@@ -31,6 +31,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-new-tokens", type=int, default=512)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     parser.add_argument(
+        "--require-cuda",
+        action="store_true",
+        help="Fail immediately when no CUDA GPU is visible.",
+    )
+    parser.add_argument(
         "--output-file",
         type=Path,
         default=Path("outputs/baseline_results.json"),
@@ -40,6 +45,18 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    import torch
+
+    if args.require_cuda and not torch.cuda.is_available():
+        raise RuntimeError(
+            "CUDA is required but unavailable. Check the NVIDIA driver, "
+            "NVIDIA Container Toolkit, and Docker --gpus all."
+        )
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    gpu_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else None
+    print(f"Evaluation device: {device}" + (f" ({gpu_name})" if gpu_name else ""))
+
     results = evaluate_pretrained_model(
         args.model_name,
         split=args.split,
@@ -56,6 +73,8 @@ def main() -> None:
         "seed": args.seed,
         "batch_size": args.batch_size,
         "max_new_tokens": args.max_new_tokens,
+        "device": device,
+        "gpu_name": gpu_name,
         "exact_match": results["exact_match"],
         "correct": results["correct"],
         "valid_predictions": results["valid_predictions"],

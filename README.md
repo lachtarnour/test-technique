@@ -68,3 +68,44 @@ L'exact match compare la dernière réponse numérique générée à la référe
 GSM8K normalisée. Le marqueur `####` est utilisé en priorité. S'il est absent,
 le dernier nombre généré est utilisé, et la non-conformité au format est
 comptabilisée séparément.
+
+## Baseline Docker sur une instance OVH GPU
+
+Prérequis sur l'instance :
+
+- architecture Linux x86-64 ;
+- pilote NVIDIA fonctionnel (`nvidia-smi`) ;
+- Docker avec NVIDIA Container Toolkit ;
+- au moins 15 Go d'espace disque libre pour l'image et le cache.
+
+Le script construit l'image, vérifie le GPU, télécharge automatiquement Qwen
+et GSM8K, sélectionne aléatoirement 1000 exemples du test set avec le seed 42,
+puis lance l'évaluation :
+
+```bash
+chmod +x script/run_ovh_baseline.sh
+./script/run_ovh_baseline.sh
+```
+
+Le résultat est écrit sur l'hôte dans :
+
+```text
+outputs/baseline_results_1000.json
+```
+
+Le cache Hugging Face est conservé dans `.cache/huggingface`, ce qui évite de
+télécharger à nouveau le modèle lors d'un second lancement.
+
+Les paramètres peuvent être adaptés avec des variables d'environnement :
+
+```bash
+BATCH_SIZE=4 SEED=123 ./script/run_ovh_baseline.sh
+```
+
+Valeurs conseillées selon la VRAM :
+
+- 8-12 Go : `BATCH_SIZE=2` ;
+- 16 Go : `BATCH_SIZE=4` ;
+- 24 Go ou plus : `BATCH_SIZE=8`.
+
+Pour reprendre le run déterministe par défaut, conserver `SEED=42`.
