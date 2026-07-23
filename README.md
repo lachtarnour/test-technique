@@ -10,7 +10,7 @@ Python 3.10+ et un GPU CUDA sont recommandés.
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requierement.txt
+pip install -r requirements.txt
 ```
 
 ## 1. Baseline
