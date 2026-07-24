@@ -159,8 +159,8 @@ métriques suivantes :
 Le fonctionnement du parseur et la définition des métriques sont détaillés
 dans :
 
-* [`[documentation/evaluation/parsing.md](https://chatgpt.com/c/documentation/evaluation/parsing.md)`](documentation/evaluation/parsing.md) ;
-* [`[documentation/evaluation/metrics.md](https://chatgpt.com/c/documentation/evaluation/metrics.md)`](documentation/evaluation/metrics.md).
+* [documentation/evaluation/parsing.md](documentation/evaluation/parsing.md) ;
+* [documentation/evaluation/metrics.md](documentation/evaluation/metrics.md).
 
 ## Vérification du code
 
