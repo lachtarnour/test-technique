@@ -1,35 +1,38 @@
 # Parsing des réponses GSM8K
 
-Cette page décrit comment un texte généré devient :
+Cette page décrit le traitement appliqué aux sorties générées par le modèle afin
+d’en extraire :
 
 - une réponse finale normalisée ;
-- une liste de formules analysées.
+- les éventuelles annotations arithmétiques.
 
-Le calcul des scores est décrit dans [metrics.md](metrics.md).
+La définition des scores calculés à partir de ces informations est disponible
+dans [metrics.md](metrics.md).
 
 ## Vue d’ensemble
 
 ```text
 texte généré
-  ├─→ réponse terminale ####
-  │     └─→ fallback si nécessaire
-  └─→ annotations <<...>>
-        └─→ AST sécurisé → résultat arithmétique
+  ├─→ extraction de la réponse terminale ####
+  │     └─→ fallback si le format strict est absent
+  └─→ extraction des annotations <<...>>
+        └─→ validation AST et calcul arithmétique
 ```
 
-## 1. Extraction de la réponse finale
+## Réponse finale
 
 ### Format strict
 
-La sortie doit se terminer par :
+Une réponse est considérée comme strictement valide si le texte se termine par
+l’un des formats suivants :
 
 ```text
 #### nombre
 #### numérateur/dénominateur
 ```
 
-L’espace après `####` est facultatif. Aucun texte ni unité ne peut suivre la
-valeur.
+L’espace après `####` est facultatif. Aucun texte, symbole ou unité ne doit
+suivre la valeur.
 
 | Fin de réponse | Valide | Valeur normalisée |
 | --- | ---: | ---: |
@@ -40,21 +43,22 @@ valeur.
 | `#### 3/5 kg` | non | — |
 | `#### 1/0` | non | — |
 
-`1/0` est détecté comme une fraction, puis rejeté car son dénominateur est nul.
+Dans le dernier exemple, la valeur est reconnue comme une fraction, puis rejetée
+car son dénominateur est nul.
 
-### Fallback
+### Fallback numérique
 
-Sans réponse terminale valide :
+Lorsqu’aucune réponse terminale valide n’est trouvée, le parseur :
 
-1. rechercher les nombres et fractions autonomes ;
-2. prendre la dernière valeur ;
-3. la normaliser.
+1. recherche les nombres et fractions autonomes présents dans le texte ;
+2. conserve la dernière valeur trouvée ;
+3. la normalise selon les mêmes règles que la réponse stricte.
 
-| Sortie | Fallback |
+| Sortie | Valeur obtenue par fallback |
 | --- | ---: |
 | `#### 3 months` | `3` |
 | `#### 3/5 kg` | `0.6` |
-| `#### 1/0` | aucune valeur |
+| `#### 1/0` | aucune |
 
 Exemple :
 
@@ -62,37 +66,45 @@ Exemple :
 John pays 3.6 in a 30-day month.
 ```
 
-Le fallback retourne `3.6`. `30` est ignoré car il appartient à `30-day`.
+Le fallback retourne `3.6`. La valeur `30` est ignorée, car elle fait partie de
+l’expression composée `30-day`.
 
-Le fallback ne comprend pas le sens du texte. Dans `40 liters in 2 buckets`,
-il retourne `2`.
+Ce mécanisme est uniquement syntaxique. Il ne cherche pas à comprendre le sens
+de la phrase. Pour la sortie suivante :
 
-Le résultat du parsing indique sa provenance :
+```text
+40 liters in 2 buckets
+```
 
-- `final_marker` : marqueur terminal valide ;
-- `fallback` : dernière valeur autonome ;
-- `None` : aucune valeur exploitable.
+la valeur retournée est donc `2`.
 
-## 2. Parsing numérique
+La provenance de la valeur extraite est enregistrée dans le résultat du
+parsing :
 
-Formats reconnus :
+- `final_marker` lorsque le marqueur terminal est valide ;
+- `fallback` lorsque la dernière valeur autonome est utilisée ;
+- `None` lorsqu’aucune valeur exploitable n’est trouvée.
+
+## Formats numériques
+
+Le parseur reconnaît les formats suivants :
 
 - entiers : `42`, `-7` ;
-- milliers : `1,000`, `12,500.25` ;
+- nombres avec séparateurs de milliers : `1,000`, `12,500.25` ;
 - décimaux : `3.5`, `.5`, `-.5` ;
 - fractions : `3/5`, `-6/8`, `1.5/.5`.
 
-Formats refusés :
+Les formats suivants sont refusés :
 
-- notation scientifique : `1e3` ;
-- valeur non finie ;
-- dénominateur nul ;
+- notation scientifique, par exemple `1e3` ;
+- valeurs non finies ;
+- fractions dont le dénominateur est nul ;
 - signe `+` devant une réponse finale.
 
-Le parsing utilise `Decimal`, puis `Fraction`. Aucun calcul n’utilise un
-`float` binaire.
+Les nombres sont analysés avec `Decimal`, puis les fractions avec `Fraction`.
+Aucun calcul ne repose sur un `float` binaire.
 
-| Entrée | Normalisation |
+| Entrée | Valeur normalisée |
 | --- | ---: |
 | `.5` | `0.5` |
 | `12.000` | `12` |
@@ -100,12 +112,12 @@ Le parsing utilise `Decimal`, puis `Fraction`. Aucun calcul n’utilise un
 | `-6/8` | `-0.75` |
 | `1/3` | `0.3333333333` |
 
-Une fraction finie produit sa valeur exacte. Une fraction périodique est
-enregistrée sur 10 décimales.
+Une fraction dont l’écriture décimale est finie conserve sa valeur exacte. Les
+fractions périodiques sont enregistrées avec dix décimales.
 
-## 3. Extraction des formules
+## Annotations arithmétiques
 
-Une formule doit utiliser ce format :
+Les calculs intermédiaires doivent être écrits sous la forme :
 
 ```text
 <<expression=result>>
@@ -113,18 +125,18 @@ Une formule doit utiliser ce format :
 
 Toutes les annotations sont conservées dans leur ordre d’apparition.
 
-Une annotation sans `>>` est également conservée, mais marquée
-`unclosed_annotation`.
+Lorsqu’une annotation commence par `<<` mais ne contient pas de fermeture `>>`,
+elle est tout de même enregistrée avec l’erreur `unclosed_annotation`.
 
-### Grammaire de l’expression
+### Grammaire acceptée
 
-| Élément | Support |
+| Élément | Valeurs acceptées |
 | --- | --- |
-| Opérateurs | `+`, `-`, `*`, `/`, `//` |
+| Opérateurs binaires | `+`, `-`, `*`, `/`, `//` |
 | Signes unaires | `+`, `-` |
 | Groupement | parenthèses |
 | Valeurs | entiers et décimaux |
-| `//` | division entière par plancher |
+| Division `//` | division entière par plancher |
 
 Exemples valides :
 
@@ -136,71 +148,81 @@ Exemples valides :
 <<8//2=4>>
 ```
 
-Après le dernier `=`, le résultat annoncé doit être un entier ou un décimal :
+La partie située après le dernier `=` doit être un entier ou un nombre décimal.
 
 ```text
 <<1/3=0.3>>   valide
 <<1/3=1/3>>   invalide
 ```
 
-Une fraction est donc autorisée dans l’expression, pas dans le résultat
+Les fractions sont donc acceptées dans l’expression, mais pas dans le résultat
 annoncé.
 
-Le prompt demande `+`, `-`, `*`, `/`. Le parseur accepte aussi `//`. Une
-évolution du parseur ne modifie donc pas automatiquement le prompt.
+Le prompt d’entraînement demande uniquement les opérateurs `+`, `-`, `*` et
+`/`. Le parseur accepte également `//`. Une modification du parseur ne modifie
+donc pas automatiquement le format demandé au modèle.
 
-## 4. Exécution sécurisée
+## Évaluation sécurisée des expressions
 
-Le code n’utilise pas `eval`.
+Les expressions ne sont jamais exécutées avec `eval`.
 
 ```text
 expression
-  → arbre AST
+  → construction de l’arbre AST
   → validation des nœuds
   → exécution récursive
-  → résultat Fraction
+  → résultat sous forme de Fraction
 ```
+
+Seuls les nœuds et opérateurs explicitement autorisés sont exécutés.
 
 | Formule refusée | Motif |
 | --- | --- |
 | `<<19=19>>` | aucune opération |
-| `<<2+2>>` | `=` absent |
+| `<<2+2>>` | signe `=` absent |
 | `<<2+2=4=4>>` | expression invalide |
-| `<<5%2=1>>` | modulo interdit |
-| `<<2**3=8>>` | puissance interdite |
-| `<<x+1=2>>` | variable interdite |
+| `<<5%2=1>>` | modulo non autorisé |
+| `<<2**3=8>>` | puissance non autorisée |
+| `<<x+1=2>>` | variable non autorisée |
 | `<<1/0=0>>` | division par zéro |
 
-Limites de sécurité :
+Des limites supplémentaires sont appliquées :
 
 - 256 caractères par expression ;
 - 64 nœuds AST ;
 - 50 chiffres par littéral ;
 - 256 chiffres par numérateur ou dénominateur intermédiaire.
 
-## 5. Résultat produit pour une formule
+## Résultat associé à une formule
 
-Chaque annotation produit notamment :
+Chaque annotation produit notamment les champs suivants :
 
-| Champ | Signification |
+| Champ | Description |
 | --- | --- |
 | `expression` | partie située avant le dernier `=` |
-| `claimed_result` | résultat annoncé et normalisé |
-| `evaluated_result` | résultat réellement calculé |
-| `parse_success` | syntaxe et AST valides |
-| `execution_success` | exécution terminée |
-| `arithmetic_correct` | résultat annoncé acceptable |
-| `error` | erreur détectée |
-| `is_correct` | parsing, exécution et résultat tous valides |
+| `claimed_result` | résultat annoncé, après normalisation |
+| `evaluated_result` | résultat obtenu par le calcul |
+| `parse_success` | indique si la syntaxe et l’AST sont valides |
+| `execution_success` | indique si l’exécution s’est terminée correctement |
+| `arithmetic_correct` | indique si le résultat annoncé est acceptable |
+| `error` | erreur éventuellement détectée |
+| `is_correct` | vrai si le parsing, l’exécution et le résultat sont valides |
 
-Erreurs possibles :
+Les erreurs possibles sont :
 
-`missing_equals`, `empty_expression`, `invalid_claimed_result`,
-`invalid_expression`, `execution_error`, `incorrect_result`,
-`unclosed_annotation`.
+```text
+missing_equals
+empty_expression
+invalid_claimed_result
+invalid_expression
+execution_error
+incorrect_result
+unclosed_annotation
+```
 
-Fichiers principaux :
+## Fichiers concernés
 
-- `src/evaluation/generation.py` : extraction finale ;
-- `src/evaluation/numeric.py` : nombres et fractions ;
-- `src/evaluation/arithmetic.py` : annotations, AST et exécution.
+- `src/evaluation/generation.py` : extraction de la réponse finale ;
+- `src/evaluation/numeric.py` : parsing des nombres et des fractions ;
+- `src/evaluation/arithmetic.py` : extraction, validation AST et exécution des
+  annotations.

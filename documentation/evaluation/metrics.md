@@ -1,120 +1,131 @@
 # Métriques d’évaluation GSM8K
 
-Cette page explique comment les sorties du
-[parseur](parsing.md) deviennent des scores.
+Cette page décrit les métriques calculées à partir des résultats produits par le
+[parseur](parsing.md).
 
-## Vue d’ensemble
+L’évaluation distingue trois aspects :
 
-Pour chaque réponse, l’évaluateur mesure séparément :
+1. l’exactitude de la réponse finale ;
+2. l’exactitude des calculs intermédiaires ;
+3. la cohérence entre le dernier calcul et la réponse finale.
 
-1. l’exactitude du résultat final ;
-2. l’exactitude des formules ;
-3. la cohérence entre la dernière formule et le résultat final.
+Une réponse peut donc contenir le bon résultat tout en présentant un raisonnement
+arithmétique incorrect.
 
-Une bonne réponse finale peut donc avoir un raisonnement invalide.
+## Comparaison numérique
 
-## 1. Comparaison numérique
-
-La comparaison suit cet ordre :
+Deux valeurs sont comparées dans l’ordre suivant :
 
 1. égalité exacte ;
-2. arrondi à la précision produite ;
-3. troncature à cette même précision.
+2. égalité après arrondi à la précision de la prédiction ;
+3. égalité après troncature à cette même précision.
 
-Pour une référence égale à `1/3` :
+Pour une valeur de référence égale à `1/3` :
 
-| Prédiction | Correcte |
+| Prédiction | Considérée comme correcte |
 | --- | ---: |
 | `0.3`, `0.33`, `0.333` | oui |
 | `0.3333333333` | oui |
 | `0.2`, `0.34`, `0.3334` | non |
 
-La tolérance porte uniquement sur la précision numérique. Une valeur proche
-mais incompatible avec l’arrondi ou la troncature reste incorrecte.
+La tolérance dépend uniquement de la précision exprimée par la prédiction. Une
+valeur proche, mais incompatible avec l’arrondi ou la troncature de la
+référence, reste incorrecte.
 
-Cette règle sert à comparer :
+Cette règle est utilisée pour comparer :
 
 - la réponse finale à la référence ;
 - le résultat annoncé d’une formule à son résultat calculé ;
-- la dernière formule à la réponse finale.
+- le résultat de la dernière formule à la réponse finale.
 
-## 2. Évaluation d’une réponse
+## Métriques par réponse
 
-### Accuracy de la réponse finale
+### Exactitude de la réponse finale
+
+Deux indicateurs sont calculés :
 
 ```text
 strict_correct =
-    marqueur #### terminal valide
+    marqueur terminal #### valide
     ET valeur correcte
 
 correct =
-    valeur stricte ou fallback
+    valeur extraite par le marqueur strict ou par fallback
     ET valeur correcte
 ```
 
-| Sortie | `strict_correct` | `correct` si référence = `3` |
+Pour une référence égale à `3` :
+
+| Sortie | `strict_correct` | `correct` |
 | --- | ---: | ---: |
 | `#### 3` | oui | oui |
 | `#### 3 months` | non | oui |
 | aucune valeur exploitable | non | non |
 
-Le fallback permet de mesurer la capacité mathématique sans confondre une
-erreur de format avec une erreur de résultat.
+Le fallback permet de distinguer une erreur de format d’une erreur de calcul.
+L’accuracy mesure ensuite la proportion de problèmes résolus.
 
-L’accuracy indique la proportion de problèmes résolus.
+### Erreur numérique
 
+L’accuracy indique si une réponse est correcte, mais ne mesure pas l’écart entre
+une mauvaise prédiction et la référence.
 
-### Erreur de la réponse finale
-
-L’accuracy indique combien de problèmes sont résolus. Elle ne précise pas
-l’importance des erreurs. `final_answer_error` ajoute cette information avec
-une erreur relative symétrique :
+La métrique `final_answer_error` utilise une erreur relative symétrique :
 
 ```text
 si p = r = 0 : e(p, r) = 0
 sinon        : e(p, r) = 2 × |p - r| / (|p| + |r|)
 ```
 
-`p` est la prédiction et `r` la référence.
+où `p` désigne la prédiction et `r` la référence.
 
-Propriétés :
+Cette erreur possède les propriétés suivantes :
 
-- `0` : prédiction et référence numériquement égales ;
-- `2` : erreur maximale ;
-- valeur indépendante de l’échelle ;
-- prédiction absente : erreur fixée à `2`.
+- `0` lorsque les deux valeurs sont numériquement égales ;
+- `2` pour l’erreur maximale ;
+- elle est indépendante de l’échelle ;
+- une prédiction absente reçoit une erreur égale à `2`.
 
-La métrique utilise la distance numérique réelle. Une approximation acceptée
-par la règle de précision peut donc garder une petite erreur non nulle.
+Une approximation acceptée par la règle de précision peut conserver une petite
+erreur non nulle, car cette métrique utilise directement la distance numérique.
 
+L’accuracy mesure donc la réussite, tandis que l’erreur mesure la proximité.
 
-#### --> L’erreur mesure la proximité ; l’accuracy mesure la réussite.
-
-### Formules
+### Exactitude des formules
 
 Pour une réponse contenant `F` formules :
 
 ```text
 step_accuracy =
-    formules correctes / F
+    nombre de formules correctes / F
 ```
 
-Sans formule, `step_accuracy = 0`.
+Lorsqu’aucune formule n’est présente :
+
+```text
+step_accuracy = 0
+```
+
+L’indicateur `all_steps_correct` est défini par :
 
 ```text
 all_steps_correct =
-    au moins une formule
+    au moins une formule présente
     ET toutes les formules sont correctes
 ```
 
-Une formule parsable mais arithmétiquement fausse n’est pas correcte.
+Une formule correctement parsée mais arithmétiquement fausse n’est pas
+considérée comme correcte.
 
 ### Cohérence interne
+
+La cohérence interne vérifie que le raisonnement arithmétique produit le même
+résultat que la réponse finale :
 
 ```text
 internal_arithmetic_consistency =
     all_steps_correct
-    ET marqueur #### terminal valide
+    ET marqueur terminal #### valide
     ET résultat calculé par la dernière formule
        égal à la réponse finale
 ```
@@ -124,14 +135,16 @@ internal_arithmetic_consistency =
 | `<<6-2=4>>` puis `#### 4` | oui |
 | `<<3+4=7>>` puis `#### 8` | non |
 | `#### 7` sans formule | non |
-| réponse correcte obtenue par fallback | non |
+| réponse correcte obtenue uniquement par fallback | non |
 
-La cohérence exige donc :
+Une réponse cohérente doit donc comporter :
 
 - au moins une formule ;
-- toutes les formules correctes ;
-- une réponse terminale stricte ;
-- l’accord entre la dernière formule et cette réponse.
+- uniquement des formules correctes ;
+- une réponse terminale au format strict ;
+- un accord entre le dernier calcul et cette réponse.
+
+La métrique combinée est définie par :
 
 ```text
 correct_and_internally_consistent =
@@ -139,64 +152,68 @@ correct_and_internally_consistent =
     ET internal_arithmetic_consistency
 ```
 
-## 3. Métriques agrégées
+## Métriques agrégées
 
-Pour `N` réponses :
+Pour un ensemble de `N` réponses :
 
-| Métrique | Calcul |
+| Métrique | Définition |
 | --- | --- |
-| `strict_final_answer_accuracy` | réponses `strict_correct` / `N` |
-| `final_answer_accuracy` | réponses `correct` / `N` |
+| `strict_final_answer_accuracy` | réponses `strict_correct` divisées par `N` |
+| `final_answer_accuracy` | réponses `correct` divisées par `N` |
 | `final_answer_error` | moyenne des erreurs relatives symétriques |
-| `mean_step_arithmetic_accuracy` | moyenne des `step_accuracy` |
-| `internal_arithmetic_consistency_rate` | réponses cohérentes / `N` |
-| `correct_and_internally_consistent_rate` | réponses correctes et cohérentes / `N` |
+| `mean_step_arithmetic_accuracy` | moyenne des valeurs `step_accuracy` |
+| `internal_arithmetic_consistency_rate` | réponses cohérentes divisées par `N` |
+| `correct_and_internally_consistent_rate` | réponses correctes et cohérentes divisées par `N` |
 
-### Agrégation des étapes
+### Agrégation des formules
 
-`mean_step_arithmetic_accuracy` est une macro-moyenne :
+`mean_step_arithmetic_accuracy` est une macro-moyenne calculée en trois étapes :
 
-- calculer le taux de formules correctes de chaque réponse ;
-- attribuer `0` aux réponses sans formule ;
-- faire la moyenne des taux.
+1. calculer la proportion de formules correctes pour chaque réponse ;
+2. attribuer une valeur de `0` aux réponses sans formule ;
+3. faire la moyenne de ces proportions.
 
-Chaque réponse a le même poids, quel que soit son nombre de formules.
+Chaque réponse possède ainsi le même poids, indépendamment du nombre de formules
+qu’elle contient.
 
 ### Diagnostics complémentaires
 
-| Diagnostic | Calcul |
+| Diagnostic | Définition |
 | --- | --- |
-| `final_answer_format_compliance_rate` | réponses avec marqueur terminal / `N` |
-| `formula_parse_rate` | formules parsables / toutes les formules |
-| `elapsed_seconds` | durée totale |
+| `final_answer_format_compliance_rate` | réponses avec un marqueur terminal valide divisées par `N` |
+| `formula_parse_rate` | formules parsables divisées par le nombre total de formules |
+| `elapsed_seconds` | durée totale de l’évaluation |
 | `samples_per_second` | `N / elapsed_seconds` |
 
-`formula_parse_rate` est une micro-moyenne globale par formule.
+Contrairement à l’accuracy arithmétique moyenne, `formula_parse_rate` est une
+micro-moyenne globale calculée au niveau des formules.
 
-## 4. Rapport JSON
+## Rapport JSON
 
-Le rapport conserve :
+Le rapport d’évaluation contient :
 
-- le modèle, le split et les paramètres de génération ;
+- le modèle, le split utilisé et les paramètres de génération ;
 - les métriques agrégées ;
 - les textes générés et les valeurs extraites ;
 - l’analyse de chaque formule ;
 - les erreurs de parsing, d’exécution et d’arithmétique.
 
-## Limite essentielle
+## Limite de l’évaluation
 
-Les métriques vérifient la syntaxe et l’arithmétique, pas la pertinence du
-raisonnement par rapport à la question.
+Ces métriques vérifient la syntaxe des annotations et la validité des calculs.
+Elles ne permettent pas de déterminer si les opérations choisies répondent
+réellement à la question.
 
 ```text
 <<10+9=19>>
 #### 19
 ```
 
-Cette réponse est cohérente arithmétiquement, même si l’opération choisie ne
-répond pas à l’énoncé.
+Cette sortie est cohérente sur le plan arithmétique, même si l’opération
+effectuée peut être sans rapport avec l’énoncé.
 
-Fichiers principaux :
+## Fichiers concernés
 
-- `src/evaluation/reasoning.py` : analyse et agrégation ;
-- `script/evaluation.py` : exécution et sauvegarde du rapport.
+- `src/evaluation/reasoning.py` : analyse des réponses et agrégation des
+  métriques ;
+- `script/evaluation.py` : exécution de l’évaluation et sauvegarde du rapport.

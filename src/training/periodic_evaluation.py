@@ -15,8 +15,8 @@ from transformers import TrainerCallback, TrainerControl, TrainerState
 
 from src.config import CONFIG
 from src.evaluation import evaluate_model
+from src.evaluation.diagnostics import select_evaluation_metrics
 from src.load_data import load_frozen_gsm8k_split
-from src.tracking import flatten_numeric_metrics
 
 PERIODIC_EVAL_SAMPLES_PER_SPLIT = 300
 PERIODIC_EVAL_BATCH_SIZE = 300
@@ -145,6 +145,11 @@ class PeriodicGenerationEvaluationCallback(TrainerCallback):
                     self.datasets[split],
                     batch_size=self.batch_size,
                     max_new_tokens=self.max_new_tokens,
+                    progress_context={
+                        "evaluation_kind": "periodic",
+                        "epoch": epoch,
+                        "split": split,
+                    },
                 )
                 split_summaries[split] = self._summary(results)
         finally:
@@ -163,16 +168,13 @@ class PeriodicGenerationEvaluationCallback(TrainerCallback):
         self._evaluated_epochs.add(epoch)
 
         if self.wandb_run is not None:
-            payload: dict[str, int | float] = {
-                "periodic_evaluation/epoch": epoch,
-                "train/global_step": state.global_step,
-            }
+            payload: dict[str, int | float] = {}
             for split, metrics in split_summaries.items():
                 payload.update(
-                    flatten_numeric_metrics(
-                        metrics,
-                        prefix=f"periodic_evaluation/{split}",
-                    )
+                    {
+                        f"periodic_evaluation/{split}/{key}": value
+                        for key, value in select_evaluation_metrics(metrics).items()
+                    }
                 )
             self.wandb_run.log(payload)
 

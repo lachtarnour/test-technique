@@ -8,7 +8,7 @@ from typing import Any
 
 import torch
 from datasets import DatasetDict
-from transformers import TrainerCallback
+from transformers import PrinterCallback, TrainerCallback
 
 from src.config import CONFIG
 from src.data.collator import CompletionOnlyDataCollator
@@ -19,7 +19,11 @@ from src.training.arguments import (
     ExperimentTrainingArguments,
 )
 from src.training.objective import CausalLanguageModelingObjective
-from src.training.trainer import EpochIntervalCallback, MathConsistencyTrainer
+from src.training.trainer import (
+    EpochIntervalCallback,
+    MathConsistencyTrainer,
+    StructuredLoggingCallback,
+)
 
 REQUIRED_COLUMNS = frozenset({"input_ids", "attention_mask", "labels"})
 
@@ -50,6 +54,7 @@ def build_training_arguments(
     eval_batch_size: int = 16,
     gradient_accumulation_steps: int = 2,
     learning_rate: float = 2e-4,
+    logging_steps: int = 10,
     validation_every_epochs: int = 1,
     log_every_epochs: int = 1,
     eval_every: int = 2,
@@ -69,12 +74,16 @@ def build_training_arguments(
         "eval_batch_size": eval_batch_size,
         "gradient_accumulation_steps": gradient_accumulation_steps,
         "learning_rate": learning_rate,
+        "logging_steps": logging_steps,
         "validation_every_epochs": validation_every_epochs,
         "log_every_epochs": log_every_epochs,
         "eval_every": eval_every,
     }
     for name, value in positive_values.items():
-        if (name.endswith("_every_epochs") or name == "eval_every") and (
+        if (
+            name.endswith("_every_epochs")
+            or name in {"eval_every", "logging_steps"}
+        ) and (
             isinstance(value, bool) or not isinstance(value, int)
         ):
             raise ValueError(f"{name} must be a strictly positive integer.")
@@ -97,7 +106,9 @@ def build_training_arguments(
         warmup_ratio=0.03,
         weight_decay=0.01,
         max_grad_norm=1.0,
-        logging_strategy="epoch",
+        logging_strategy="steps",
+        logging_steps=logging_steps,
+        disable_tqdm=True,
         eval_strategy="epoch",
         save_strategy="epoch",
         save_total_limit=2,
@@ -135,7 +146,7 @@ def build_training_trainer(
         raise ValueError(f"Unsupported objective: {experiment_config.objective}")
     if tokenizer.pad_token_id is None:
         raise ValueError("The tokenizer must define pad_token_id.")
-    return MathConsistencyTrainer(
+    trainer = MathConsistencyTrainer(
         model=model,
         args=training_arguments,
         train_dataset=dataset["train"],
@@ -144,6 +155,7 @@ def build_training_trainer(
         processing_class=tokenizer,
         objective=CausalLanguageModelingObjective(),
         callbacks=[
+            StructuredLoggingCallback(),
             EpochIntervalCallback(
                 validation_every_epochs=(training_arguments.validation_every_epochs),
                 log_every_epochs=training_arguments.log_every_epochs,
@@ -151,3 +163,5 @@ def build_training_trainer(
             *(callbacks or []),
         ],
     )
+    trainer.remove_callback(PrinterCallback)
+    return trainer

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 from typing import Any
 
@@ -11,6 +12,45 @@ from transformers import Trainer, TrainerCallback, TrainerControl, TrainerState
 from src.training.objective import ObjectiveContext, TrainingObjective
 
 _MODEL_INPUTS = frozenset({"input_ids", "attention_mask"})
+
+
+class StructuredLoggingCallback(TrainerCallback):
+    """Print Trainer metrics as one JSON record per logging event."""
+
+    def on_log(
+        self,
+        args: Any,
+        state: TrainerState,
+        control: TrainerControl,
+        *,
+        logs: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        del args, control, kwargs
+        if not state.is_world_process_zero or not logs:
+            return
+
+        if any(key.startswith("eval_") for key in logs):
+            phase = "validation"
+        elif any(key.startswith("train_") for key in logs):
+            phase = "training_summary"
+        else:
+            phase = "training"
+        payload = {
+            "phase": phase,
+            "event": "metrics",
+            "global_step": state.global_step,
+            **logs,
+        }
+        print(
+            json.dumps(
+                payload,
+                default=str,
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+            flush=True,
+        )
 
 
 class EpochIntervalCallback(TrainerCallback):

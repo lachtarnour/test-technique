@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Mapping
 from typing import Any
 
 METRIC_KEYS = (
@@ -14,6 +15,18 @@ METRIC_KEYS = (
     "correct_and_internally_consistent_rate",
 )
 SAMPLE_LIMIT = 50
+
+
+def select_evaluation_metrics(
+    results: Mapping[str, Any],
+) -> dict[str, int | float]:
+    """Return only the scientific metrics intended for experiment tracking."""
+    return {
+        key: value
+        for key in METRIC_KEYS
+        if isinstance((value := results.get(key)), (int, float))
+        and not isinstance(value, bool)
+    }
 
 
 def diagnose_evaluation(results: dict[str, Any]) -> dict[str, Any]:

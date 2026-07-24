@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import torch
+from datasets import disable_progress_bars
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -19,6 +20,7 @@ from src.cli import positive_float, positive_int
 from src.config import CONFIG
 from src.data.dataset import prepare_tokenized_dataset
 from src.evaluation import evaluate_model
+from src.evaluation.diagnostics import select_evaluation_metrics
 from src.load_data import load_frozen_gsm8k_split
 from src.model.factory import build_language_model
 from src.tokenizer import load_tokenizer
@@ -107,6 +109,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--learning-rate", type=positive_float, default=2e-4)
     parser.add_argument(
+        "--logging-steps",
+        type=positive_int,
+        default=10,
+        help="Write structured training metrics every N optimizer steps.",
+    )
+    parser.add_argument(
         "--validation-every-epochs",
         type=positive_int,
         default=1,
@@ -185,6 +193,7 @@ def _cuda_memory_metrics() -> dict[str, int | float] | None:
 
 def main() -> None:
     args = parse_args()
+    disable_progress_bars()
     if args.require_cuda and not torch.cuda.is_available():
         raise RuntimeError("CUDA is required, but no CUDA GPU is available.")
     if torch.cuda.is_available():
@@ -214,6 +223,7 @@ def main() -> None:
             "periodic_eval_batch_size": args.periodic_eval_batch_size,
             "gradient_accumulation_steps": args.gradient_accumulation_steps,
             "learning_rate": args.learning_rate,
+            "logging_steps": args.logging_steps,
             "validation_every_epochs": args.validation_every_epochs,
             "log_every_epochs": args.log_every_epochs,
             "eval_every": args.eval_every,
@@ -260,6 +270,7 @@ def main() -> None:
         eval_batch_size=args.eval_batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         learning_rate=args.learning_rate,
+        logging_steps=args.logging_steps,
         validation_every_epochs=args.validation_every_epochs,
         log_every_epochs=args.log_every_epochs,
         eval_every=args.eval_every,
@@ -304,6 +315,10 @@ def main() -> None:
         evaluation_dataset,
         batch_size=args.generation_batch_size,
         max_new_tokens=args.max_new_tokens,
+        progress_context={
+            "evaluation_kind": "post_training",
+            "split": "validation",
+        },
     )
     cuda_memory = _cuda_memory_metrics()
 
@@ -334,6 +349,7 @@ def main() -> None:
             "periodic_eval_batch_size": args.periodic_eval_batch_size,
             "gradient_accumulation_steps": args.gradient_accumulation_steps,
             "learning_rate": args.learning_rate,
+            "logging_steps": args.logging_steps,
             "validation_every_epochs": args.validation_every_epochs,
             "log_every_epochs": args.log_every_epochs,
             "eval_every": args.eval_every,
@@ -367,7 +383,9 @@ def main() -> None:
         metrics={
             "train_final": report["train_metrics"],
             "validation_final": report["validation_metrics"],
-            "generation_evaluation": report["generation_evaluation"],
+            "generation_evaluation": select_evaluation_metrics(
+                report["generation_evaluation"]
+            ),
             "cuda_memory": report["cuda_memory"] or {},
         },
     )

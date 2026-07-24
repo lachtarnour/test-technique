@@ -1,75 +1,97 @@
 # Fine-tuning de Qwen2.5 sur GSM8K
 
-Ce projet compare
-[`Qwen/Qwen2.5-1.5B-Instruct`](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct)
-à une version adaptée par LoRA sur
-[`openai/gsm8k`](https://huggingface.co/datasets/openai/gsm8k).
+Ce dépôt contient une expérience de fine-tuning de
+[`[Qwen/Qwen2.5-1.5B-Instruct](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct)`](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct)
+avec LoRA sur le dataset
+[`[openai/gsm8k](https://huggingface.co/datasets/openai/gsm8k)`](https://huggingface.co/datasets/openai/gsm8k).
 
-L’évaluation mesure séparément la justesse de la réponse finale et la cohérence
-du raisonnement arithmétique intermédiaire.
+L’objectif est de comparer le modèle d’origine au modèle adapté, en évaluant
+séparément :
 
-## Points clés
+* la justesse de la réponse numérique finale ;
+* la validité des calculs intermédiaires générés par le modèle.
 
-- split train/validation/test figé, déterministe et sans recouvrement ;
-- révision du dataset, seed et empreintes SHA-256 enregistrés ;
-- entraînement LoRA completion-only avec normalisation exacte par token cible ;
-- validation et sélection du meilleur checkpoint par `eval_loss` ;
-- évaluation périodique sur deux sous-ensembles fixes de 300 exemples ;
-- parsing arithmétique sécurisé par AST, sans utilisation de `eval` ;
-- suivi optionnel des hyperparamètres et métriques avec Weights & Biases ;
-- quatre smoke tests publics couvrant le forward du modèle, le tokenizer,
-  le parsing et le contrat question/prompt.
+## Méthodologie
 
-## Protocole
+Le pipeline comprend :
 
-| Élément | Valeur |
-| --- | --- |
-| Modèle | `Qwen/Qwen2.5-1.5B-Instruct` |
-| Dataset | `openai/gsm8k`, configuration `main` |
-| Train / validation / test | 6 352 / 1 121 / 1 319 |
-| Seed | 42 |
-| Objectif | causal language modeling completion-only |
-| LoRA | `r=8`, alpha `16`, dropout `0.05`, couches linéaires |
-| Epochs | 3 |
-| Batch train / accumulation | 24 / 2 |
-| Batch validation | 16 |
-| Learning rate | `2e-4`, scheduler cosine, warmup 3 % |
-| Longueur maximale | 1 024 tokens |
-| Génération | greedy, 768 nouveaux tokens maximum |
-| Évaluation périodique | epochs 0, 2, 4… |
+* un découpage train/validation/test déterministe et sans recouvrement ;
+* l’enregistrement de la version du dataset, de la seed et des empreintes
+  SHA-256 ;
+* un entraînement LoRA en completion-only ;
+* une loss normalisée par le nombre exact de tokens cibles ;
+* la sélection du meilleur checkpoint à partir de `eval_loss` ;
+* une évaluation périodique sur deux sous-ensembles fixes de 300 exemples ;
+* un parseur arithmétique basé sur l’AST Python, sans appel à `eval` ;
+* un suivi optionnel des expériences avec Weights & Biases.
 
-Le test officiel reste isolé pendant le développement. Il est utilisé
-uniquement pour l’évaluation finale du modèle préentraîné ou du checkpoint
-LoRA retenu.
+Le dépôt contient également quatre smoke tests portant sur le forward du
+modèle, le tokenizer, le parsing arithmétique et la construction des prompts.
+
+## Configuration de référence
+
+| Paramètre                 | Valeur                                               |
+| ------------------------- | ---------------------------------------------------- |
+| Modèle                    | `Qwen/Qwen2.5-1.5B-Instruct`                         |
+| Dataset                   | `openai/gsm8k`, configuration `main`                 |
+| Train / validation / test | 6 352 / 1 121 / 1 319                                |
+| Seed                      | 42                                                   |
+| Objectif                  | Causal language modeling, completion-only            |
+| LoRA                      | `r=8`, alpha `16`, dropout `0.05`, couches linéaires |
+| Nombre d’epochs           | 3                                                    |
+| Batch d’entraînement      | 24                                                   |
+| Accumulation de gradients | 2                                                    |
+| Batch de validation       | 16                                                   |
+| Learning rate             | `2e-4`                                               |
+| Scheduler                 | Cosine                                               |
+| Warmup                    | 3 %                                                  |
+| Longueur maximale         | 1 024 tokens                                         |
+| Décodage                  | Greedy                                               |
+| Nouveaux tokens maximum   | 768                                                  |
+| Fréquence d’évaluation    | Tous les 2 epochs                                    |
+
+Le split de test officiel n’est pas utilisé pendant le développement. Il est
+réservé à l’évaluation finale du modèle préentraîné et du checkpoint LoRA
+sélectionné.
 
 ## Installation
 
-Prérequis : Python 3.10 à 3.13. Un GPU CUDA est recommandé pour l’entraînement.
+Le projet nécessite Python 3.10 à 3.13. Un GPU CUDA est recommandé pour
+l’entraînement.
 
 ```bash
 python3 -m pip install uv
 uv sync --frozen
 ```
 
-Le suivi W&B est optionnel :
+Le suivi avec Weights & Biases est facultatif. Pour l’activer :
 
 ```bash
 cp .env.example .env
-# Renseigner WANDB_KEY dans .env
+# Ajouter WANDB_KEY dans le fichier .env
 ```
 
-Utiliser `--wandb-mode disabled` pour exécuter une commande sans W&B.
+Pour désactiver W&B sur une commande :
 
-## Préparation des données
+```bash
+--wandb-mode disabled
+```
 
-Créer une fois le split reproductible :
+## Préparation du dataset
+
+Le split reproductible doit être créé une seule fois :
 
 ```bash
 uv run python script/create_data_split.py
 ```
 
-Le dataset généré et son manifeste sont placés dans
-`data/gsm8k_train_validation15_test_seed42/`. Ce dossier est ignoré par Git.
+Les données générées et leur manifeste sont enregistrés dans :
+
+```text
+data/gsm8k_train_validation15_test_seed42/
+```
+
+Ce dossier n’est pas suivi par Git.
 
 ## Entraînement
 
@@ -86,14 +108,19 @@ uv run python script/train.py \
   --require-cuda
 ```
 
-Les tailles de batch correspondent au run de référence sur une V100S 32 Go et
-restent configurables selon le GPU. Le modèle, le tokenizer et le rapport JSON
-sont enregistrés par défaut dans
-`outputs/qwen2.5-1.5b-gsm8k-a1-control/`.
+Cette configuration correspond au run de référence effectué sur une V100S de
+32 Go. Les tailles de batch peuvent être ajustées selon la mémoire disponible.
+
+Par défaut, le modèle, le tokenizer et le rapport d’entraînement sont
+enregistrés dans :
+
+```text
+outputs/qwen2.5-1.5b-gsm8k-a1-control/
+```
 
 ## Évaluation
 
-Évaluer le modèle préentraîné sur le test officiel :
+### Modèle préentraîné
 
 ```bash
 uv run python script/evaluation.py \
@@ -101,7 +128,7 @@ uv run python script/evaluation.py \
   --output-file outputs/a0_test.json
 ```
 
-Évaluer l’adaptateur entraîné :
+### Modèle adapté avec LoRA
 
 ```bash
 uv run python script/evaluation.py \
@@ -110,34 +137,47 @@ uv run python script/evaluation.py \
   --output-file outputs/a1_test.json
 ```
 
-Pour un smoke test, ajouter par exemple `--subset-size 20`. Les rapports
-contiennent les prédictions ainsi que :
+Pour vérifier rapidement que le pipeline fonctionne, il est possible de limiter
+l’évaluation à quelques exemples :
 
-- l’accuracy stricte au format `#### nombre` ;
-- l’accuracy numérique avec fallback ;
-- l’erreur numérique relative ;
-- l’exactitude des annotations `<<expression=result>>` ;
-- la cohérence entre le dernier calcul et la réponse finale.
+```bash
+uv run python script/evaluation.py \
+  --subset-size 20 \
+  --experiment-name smoke-test \
+  --output-file outputs/smoke_test.json
+```
 
-Le [parsing](documentation/evaluation/parsing.md) et les
-[métriques](documentation/evaluation/metrics.md) sont documentés séparément.
+Les rapports JSON contiennent les prédictions individuelles ainsi que les
+métriques suivantes :
 
-## Qualité du code
+* accuracy stricte, basée sur le format `#### nombre` ;
+* accuracy numérique avec méthode de fallback ;
+* erreur numérique relative ;
+* exactitude des annotations `<<expression=result>>` ;
+* cohérence entre le dernier calcul généré et la réponse finale.
+
+Le fonctionnement du parseur et la définition des métriques sont détaillés
+dans :
+
+* [`[documentation/evaluation/parsing.md](https://chatgpt.com/c/documentation/evaluation/parsing.md)`](documentation/evaluation/parsing.md) ;
+* [`[documentation/evaluation/metrics.md](https://chatgpt.com/c/documentation/evaluation/metrics.md)`](documentation/evaluation/metrics.md).
+
+## Vérification du code
 
 ```bash
 uv run ruff check .
 uv run pytest
 ```
 
-## Structure
+## Organisation du dépôt
 
 ```text
-configs/        configuration de l’expérience
-documentation/  définition du parsing et des métriques
-script/         points d’entrée reproductibles
+configs/        configuration des expériences
+documentation/  documentation du parsing et des métriques
+script/         scripts d’entraînement, d’évaluation et de préparation
 src/data/       formatage, tokenisation et collateur
-src/model/      construction du modèle LoRA
-src/training/   objectif, Trainer et planning
-src/evaluation/ génération, parsing et métriques
-tests/          quatre smoke tests publics
+src/model/      chargement du modèle et configuration LoRA
+src/training/   loss, Trainer et planning d’évaluation
+src/evaluation/ génération, parsing et calcul des métriques
+tests/          smoke tests
 ```

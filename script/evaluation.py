@@ -17,6 +17,7 @@ from src.evaluation import (
     evaluate_checkpoint,
     evaluate_pretrained_model,
 )
+from src.evaluation.diagnostics import select_evaluation_metrics
 from src.tracking import (
     WANDB_MODES,
     finish_wandb_run,
@@ -160,7 +161,7 @@ def main() -> None:
         wandb_run,
         model_name=str(model_source),
         experiment_name=experiment_name,
-        metrics=results,
+        metrics=select_evaluation_metrics(results),
         prefix="evaluation",
     )
     finish_wandb_run(wandb_run)

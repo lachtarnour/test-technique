@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import threading
 import time
@@ -29,9 +30,20 @@ STANDALONE_VALUE_PATTERN = re.compile(
 PROGRESS_HEARTBEAT_SECONDS = 30.0
 
 
-def _print_evaluation_progress(message: str) -> None:
-    """Write one immediately visible line to local and remote job logs."""
-    print(f"[evaluation] {message}", flush=True)
+def _print_evaluation_progress(
+    event: str,
+    *,
+    progress_context: Mapping[str, Any],
+    **fields: Any,
+) -> None:
+    """Write one machine-readable line to local and remote job logs."""
+    payload = {
+        "phase": "evaluation",
+        **progress_context,
+        "event": event,
+        **fields,
+    }
+    print(json.dumps(payload, ensure_ascii=False, sort_keys=True), flush=True)
 
 
 @contextmanager
@@ -41,6 +53,7 @@ def _generation_heartbeat(
     total_batches: int,
     completed_examples: int,
     total_examples: int,
+    progress_context: Mapping[str, Any],
 ):
     """Report progress while the blocking model.generate call is running."""
     stop_event = threading.Event()
@@ -51,10 +64,14 @@ def _generation_heartbeat(
             elapsed = time.perf_counter() - batch_started_at
             percentage = 100 * completed_examples / total_examples
             _print_evaluation_progress(
-                f"batch {batch_index}/{total_batches} running"
-                f" | completed={completed_examples}/{total_examples}"
-                f" ({percentage:.1f}%)"
-                f" | batch_elapsed={elapsed:.1f}s"
+                "batch_running",
+                progress_context=progress_context,
+                batch_index=batch_index,
+                total_batches=total_batches,
+                completed_examples=completed_examples,
+                total_examples=total_examples,
+                completed_percent=round(percentage, 1),
+                batch_elapsed_seconds=round(elapsed, 1),
             )
 
     reporter = threading.Thread(
@@ -122,6 +139,7 @@ def generate_model_responses(
     max_new_tokens: int = CONFIG.max_new_tokens,
     generation_kwargs: Mapping[str, Any] | None = None,
     system_prompt: str = CONFIG.system_prompt,
+    progress_context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Generate responses and normalize GSM8K references."""
     if batch_size <= 0:
@@ -159,18 +177,30 @@ def generate_model_responses(
     starts = range(0, len(dataset), batch_size)
     total_examples = len(dataset)
     total_batches = len(starts)
+    resolved_progress_context = dict(progress_context or {})
     _print_evaluation_progress(
-        f"started | completed=0/{total_examples} (0.0%)"
-        f" | batches={total_batches} | batch_size={batch_size}"
+        "started",
+        progress_context=resolved_progress_context,
+        completed_examples=0,
+        total_examples=total_examples,
+        completed_percent=0.0,
+        total_batches=total_batches,
+        batch_size=batch_size,
     )
 
     for batch_index, start in enumerate(starts, start=1):
         stop = min(start + batch_size, total_examples)
         completed_percentage = 100 * start / total_examples
         _print_evaluation_progress(
-            f"batch {batch_index}/{total_batches} started"
-            f" | examples={start + 1}-{stop}/{total_examples}"
-            f" | completed={start}/{total_examples} ({completed_percentage:.1f}%)"
+            "batch_started",
+            progress_context=resolved_progress_context,
+            batch_index=batch_index,
+            total_batches=total_batches,
+            first_example=start + 1,
+            last_example=stop,
+            completed_examples=start,
+            total_examples=total_examples,
+            completed_percent=round(completed_percentage, 1),
         )
         batch_started_at = time.perf_counter()
         batch = dataset[start : start + batch_size]
@@ -200,6 +230,7 @@ def generate_model_responses(
                 total_batches=total_batches,
                 completed_examples=start,
                 total_examples=total_examples,
+                progress_context=resolved_progress_context,
             ),
             torch.inference_mode(),
         ):
@@ -241,22 +272,30 @@ def generate_model_responses(
         )
         completed_percentage = 100 * completed_examples / total_examples
         _print_evaluation_progress(
-            f"batch {batch_index}/{total_batches} completed"
-            f" | completed={completed_examples}/{total_examples}"
-            f" ({completed_percentage:.1f}%)"
-            f" | batch_time={batch_elapsed_seconds:.1f}s"
-            f" | elapsed={elapsed_seconds:.1f}s"
-            f" | speed={samples_per_second:.2f} examples/s"
-            f" | eta={eta_seconds:.1f}s"
+            "batch_completed",
+            progress_context=resolved_progress_context,
+            batch_index=batch_index,
+            total_batches=total_batches,
+            completed_examples=completed_examples,
+            total_examples=total_examples,
+            completed_percent=round(completed_percentage, 1),
+            batch_seconds=round(batch_elapsed_seconds, 1),
+            elapsed_seconds=round(elapsed_seconds, 1),
+            examples_per_second=round(samples_per_second, 2),
+            eta_seconds=round(eta_seconds, 1),
         )
 
     total = len(predictions)
     elapsed_seconds = time.perf_counter() - started_at
     samples_per_second = total / elapsed_seconds
     _print_evaluation_progress(
-        f"completed | completed={total}/{total_examples} (100.0%)"
-        f" | elapsed={elapsed_seconds:.1f}s"
-        f" | speed={samples_per_second:.2f} examples/s"
+        "completed",
+        progress_context=resolved_progress_context,
+        completed_examples=total,
+        total_examples=total_examples,
+        completed_percent=100.0,
+        elapsed_seconds=round(elapsed_seconds, 1),
+        examples_per_second=round(samples_per_second, 2),
     )
     return {
         "elapsed_seconds": elapsed_seconds,
