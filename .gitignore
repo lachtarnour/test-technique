@@ -1,2 +1,32 @@
 .venv/
+.env
+.env.*
+!.env.example
+.DS_Store
+.ipynb_checkpoints/
+.pytest_cache/
+.ruff_cache/
 __pycache__/
+*.py[cod]
+*.log
+.coverage
+htmlcov/
+
+# Keep the extensive local suite private; publish only the four smoke tests.
+tests/*
+!tests/test_smoke.py
+
+# Generated datasets and experiment outputs.
+data/
+output/
+outputs/
+wandb/
+
+# Local GPU and cloud deployment files (kept locally, not published).
+.dockerignore
+Dockerfile.data
+Dockerfile.gpu-evaluation
+Dockerfile.gpu-training
+script/build_push_training_image.sh
+script/run_ovh_training.sh
+script/upload_wandb_secret.sh

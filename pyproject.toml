@@ -1,0 +1,48 @@
+[project]
+name = "qwen-gsm8k"
+version = "0.1.0"
+description = "Evaluation and LoRA fine-tuning of Qwen2.5 on GSM8K"
+requires-python = ">=3.10,<3.14"
+dependencies = []
+
+# Keep one dependency manifest while retaining small, purpose-built environments.
+# Groups are nested so that shared versions are declared only once.
+[dependency-groups]
+data = [
+    "datasets>=3.0.0,<6.0.0",
+    "tqdm>=4.66.0,<5.0.0",
+]
+runtime = [
+    { include-group = "data" },
+    # Matches the CUDA runtime supplied by Dockerfile.gpu-evaluation.
+    "torch==2.6.0",
+    "transformers>=4.57.0,<5.0.0",
+    "accelerate>=1.0.0,<2.0.0",
+    "peft>=0.13.0,<1.0.0",
+    "python-dotenv>=1.0.0,<2.0.0",
+    "wandb>=0.19.0,<1.0.0",
+]
+dev = [
+    { include-group = "runtime" },
+    "pytest>=8.0.0,<10.0.0",
+    "ruff>=0.9.0,<1.0.0",
+]
+
+[tool.uv]
+default-groups = ["dev"]
+package = false
+
+[tool.pytest.ini_options]
+addopts = "-q"
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["B", "E", "F", "I", "SIM", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+"script/*.py" = ["E402"]

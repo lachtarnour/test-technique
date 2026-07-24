@@ -1,111 +1,143 @@
-# Qwen2.5-1.5B-Instruct sur GSM8K
+# Fine-tuning de Qwen2.5 sur GSM8K
 
-Ce projet mesure une baseline sur GSM8K, puis fine-tune le même modèle avec
-LoRA et réévalue ses réponses numériques.
+Ce projet compare
+[`Qwen/Qwen2.5-1.5B-Instruct`](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct)
+à une version adaptée par LoRA sur
+[`openai/gsm8k`](https://huggingface.co/datasets/openai/gsm8k).
+
+L’évaluation mesure séparément la justesse de la réponse finale et la cohérence
+du raisonnement arithmétique intermédiaire.
+
+## Points clés
+
+- split train/validation/test figé, déterministe et sans recouvrement ;
+- révision du dataset, seed et empreintes SHA-256 enregistrés ;
+- entraînement LoRA completion-only avec normalisation exacte par token cible ;
+- validation et sélection du meilleur checkpoint par `eval_loss` ;
+- évaluation périodique sur deux sous-ensembles fixes de 300 exemples ;
+- parsing arithmétique sécurisé par AST, sans utilisation de `eval` ;
+- suivi optionnel des hyperparamètres et métriques avec Weights & Biases ;
+- quatre smoke tests publics couvrant le forward du modèle, le tokenizer,
+  le parsing et le contrat question/prompt.
+
+## Protocole
+
+| Élément | Valeur |
+| --- | --- |
+| Modèle | `Qwen/Qwen2.5-1.5B-Instruct` |
+| Dataset | `openai/gsm8k`, configuration `main` |
+| Train / validation / test | 6 352 / 1 121 / 1 319 |
+| Seed | 42 |
+| Objectif | causal language modeling completion-only |
+| LoRA | `r=8`, alpha `16`, dropout `0.05`, couches linéaires |
+| Epochs | 3 |
+| Batch train / accumulation | 24 / 2 |
+| Batch validation | 16 |
+| Learning rate | `2e-4`, scheduler cosine, warmup 3 % |
+| Longueur maximale | 1 024 tokens |
+| Génération | greedy, 768 nouveaux tokens maximum |
+| Évaluation périodique | epochs 0, 2, 4… |
+
+Le test officiel reste isolé pendant le développement. Il est utilisé
+uniquement pour l’évaluation finale du modèle préentraîné ou du checkpoint
+LoRA retenu.
 
 ## Installation
 
-Python 3.10+ et un GPU CUDA sont recommandés.
+Prérequis : Python 3.10 à 3.13. Un GPU CUDA est recommandé pour l’entraînement.
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+python3 -m pip install uv
+uv sync --frozen
 ```
 
-## 1. Baseline
-
-La commande suivante évalue `Qwen/Qwen2.5-1.5B-Instruct` sur 100 exemples
-déterministes du test set :
+Le suivi W&B est optionnel :
 
 ```bash
-python3 script/evaluation.py
+cp .env.example .env
+# Renseigner WANDB_KEY dans .env
 ```
 
-Les résultats complets sont écrits dans
-`outputs/baseline_results.json`. Le fichier contient l'exact match, le taux de
-réponses numériques valides, le taux de respect du marqueur `####` et chaque
-prédiction individuelle.
+Utiliser `--wandb-mode disabled` pour exécuter une commande sans W&B.
 
-## 2. Fine-tuning LoRA
+## Préparation des données
+
+Créer une fois le split reproductible :
 
 ```bash
-python3 script/train.py
+uv run python script/create_data_split.py
 ```
 
-La configuration par défaut utilise :
+Le dataset généré et son manifeste sont placés dans
+`data/gsm8k_train_validation15_test_seed42/`. Ce dossier est ignoré par Git.
 
-- tout le train set GSM8K, avec 10 % réservés à la validation ;
-- une époque ;
-- LoRA sur les couches linéaires de Qwen ;
-- une cross-entropy uniquement sur la completion ;
-- une longueur maximale de 1024 tokens ;
-- un batch effectif de 16 (`2 × 8` par GPU) ;
-- une évaluation finale sur les mêmes 100 exemples test que la baseline.
-
-L'adapter, le tokenizer et le rapport final sont sauvegardés dans
-`outputs/qwen2.5-1.5b-gsm8k/`.
-
-Pour un essai plus court :
+## Entraînement
 
 ```bash
-python3 script/train.py \
-  --train-subset-size 2000 \
-  --num-train-epochs 1
+uv run python script/train.py \
+  --num-train-epochs 3 \
+  --train-batch-size 24 \
+  --gradient-accumulation-steps 2 \
+  --eval-batch-size 16 \
+  --periodic-eval-batch-size 300 \
+  --generation-batch-size 300 \
+  --eval-every 2 \
+  --wandb-project qwen-gsm8k \
+  --require-cuda
 ```
 
-En cas de mémoire GPU insuffisante :
+Les tailles de batch correspondent au run de référence sur une V100S 32 Go et
+restent configurables selon le GPU. Le modèle, le tokenizer et le rapport JSON
+sont enregistrés par défaut dans
+`outputs/qwen2.5-1.5b-gsm8k-a1-control/`.
+
+## Évaluation
+
+Évaluer le modèle préentraîné sur le test officiel :
 
 ```bash
-python3 script/train.py \
-  --train-batch-size 1 \
-  --gradient-accumulation-steps 16
+uv run python script/evaluation.py \
+  --experiment-name a0-pretrained-test \
+  --output-file outputs/a0_test.json
 ```
 
-## Métrique
-
-L'exact match compare la dernière réponse numérique générée à la référence
-GSM8K normalisée. Le marqueur `####` est utilisé en priorité. S'il est absent,
-le dernier nombre généré est utilisé, et la non-conformité au format est
-comptabilisée séparément.
-
-## Baseline Docker sur une instance OVH GPU
-
-Prérequis sur l'instance :
-
-- architecture Linux x86-64 ;
-- pilote NVIDIA fonctionnel (`nvidia-smi`) ;
-- Docker avec NVIDIA Container Toolkit ;
-- au moins 15 Go d'espace disque libre pour l'image et le cache.
-
-Le script construit l'image, vérifie le GPU, télécharge automatiquement Qwen
-et GSM8K, sélectionne aléatoirement 1000 exemples du test set avec le seed 42,
-puis lance l'évaluation :
+Évaluer l’adaptateur entraîné :
 
 ```bash
-chmod +x script/run_ovh_baseline.sh
-./script/run_ovh_baseline.sh
+uv run python script/evaluation.py \
+  --checkpoint-path outputs/qwen2.5-1.5b-gsm8k-a1-control \
+  --experiment-name a1-lora-test \
+  --output-file outputs/a1_test.json
 ```
 
-Le résultat est écrit sur l'hôte dans :
+Pour un smoke test, ajouter par exemple `--subset-size 20`. Les rapports
+contiennent les prédictions ainsi que :
+
+- l’accuracy stricte au format `#### nombre` ;
+- l’accuracy numérique avec fallback ;
+- l’erreur numérique relative ;
+- l’exactitude des annotations `<<expression=result>>` ;
+- la cohérence entre le dernier calcul et la réponse finale.
+
+Le [parsing](documentation/evaluation/parsing.md) et les
+[métriques](documentation/evaluation/metrics.md) sont documentés séparément.
+
+## Qualité du code
+
+```bash
+uv run ruff check .
+uv run pytest
+```
+
+## Structure
 
 ```text
-outputs/baseline_results_1000.json
+configs/        configuration de l’expérience
+documentation/  définition du parsing et des métriques
+script/         points d’entrée reproductibles
+src/data/       formatage, tokenisation et collateur
+src/model/      construction du modèle LoRA
+src/training/   objectif, Trainer et planning
+src/evaluation/ génération, parsing et métriques
+tests/          quatre smoke tests publics
 ```
-
-Le cache Hugging Face est conservé dans `.cache/huggingface`, ce qui évite de
-télécharger à nouveau le modèle lors d'un second lancement.
-
-Les paramètres peuvent être adaptés avec des variables d'environnement :
-
-```bash
-BATCH_SIZE=4 SEED=123 ./script/run_ovh_baseline.sh
-```
-
-Valeurs conseillées selon la VRAM :
-
-- 8-12 Go : `BATCH_SIZE=2` ;
-- 16 Go : `BATCH_SIZE=4` ;
-- 24 Go ou plus : `BATCH_SIZE=8`.
-
-Pour reprendre le run déterministe par défaut, conserver `SEED=42`.
