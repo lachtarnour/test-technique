@@ -12,12 +12,14 @@ __pycache__/
 .coverage
 htmlcov/
 
-# Keep the extensive local suite private; publish only the four smoke tests.
+# Keep the extensive local suite private; publish smoke and V1 parser tests.
 tests/*
 !tests/test_smoke.py
+!tests/test_math_parser.py
+!tests/test_graph_builder.py
 
 # Generated datasets and experiment outputs.
-data/
+/data/
 output/
 outputs/
 wandb/

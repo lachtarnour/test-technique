@@ -11,6 +11,23 @@ séparément :
 * la justesse de la réponse numérique finale ;
 * la validité des calculs intermédiaires générés par le modèle.
 
+## Protocole de comparaison
+
+Afin de garantir une comparaison équitable et reproductible, la méthode
+d’évaluation a été définie et figée avant le lancement des expériences. Le même
+protocole sera ainsi appliqué aux différentes approches étudiées :
+
+* une approche classique, entraînée avec une fonction de perte d’entropie
+  croisée ;
+* une variante intégrant l’objectif **Math-Consistent**, afin de renforcer la
+  cohérence des calculs intermédiaires.
+
+Le fonctionnement du parseur et la définition des métriques sont détaillés
+dans :
+
+* [documentation/evaluation/parsing.md](https://github.com/lachtarnour/test-technique/blob/master/documentation/evaluation/parsing.md) ;
+* [documentation/evaluation/metrics.md](https://github.com/lachtarnour/test-technique/blob/master/documentation/evaluation/metrics.md).
+
 ## Méthodologie
 
 Le pipeline comprend :
@@ -155,12 +172,6 @@ métriques suivantes :
 * erreur numérique relative ;
 * exactitude des annotations `<<expression=result>>` ;
 * cohérence entre le dernier calcul généré et la réponse finale.
-
-Le fonctionnement du parseur et la définition des métriques sont détaillés
-dans :
-
-* [documentation/evaluation/parsing.md](documentation/evaluation/parsing.md) ;
-* [documentation/evaluation/metrics.md](documentation/evaluation/metrics.md).
 
 ## Vérification du code
 

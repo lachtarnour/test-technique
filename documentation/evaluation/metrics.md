@@ -32,6 +32,19 @@ La tolérance dépend uniquement de la précision exprimée par la prédiction. 
 valeur proche, mais incompatible avec l’arrondi ou la troncature de la
 référence, reste incorrecte.
 
+Pour une valeur de référence égale à `6/7` :
+
+| Prédiction | Règle appliquée | Correcte pour l’accuracy |
+| --- | --- | ---: |
+| `0.857142857` | troncature à neuf décimales | oui |
+| `0.86` | arrondi à deux décimales | oui |
+| `0.85` | troncature à deux décimales | oui |
+| `0.87` | ni arrondi ni troncature | non |
+
+Une approximation acceptée est donc **correcte pour l’accuracy**, sans être
+présentée comme une égalité mathématique exacte. La valeur exacte reste stockée
+en interne sous forme de `Fraction`.
+
 Cette règle est utilisée pour comparer :
 
 - la réponse finale à la référence ;

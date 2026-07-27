@@ -148,15 +148,18 @@ Exemples valides :
 <<8//2=4>>
 ```
 
-La partie située après le dernier `=` doit être un entier ou un nombre décimal.
+La partie située après le dernier `=` peut être un entier, un nombre décimal ou
+une fraction.
 
 ```text
 <<1/3=0.3>>   valide
-<<1/3=1/3>>   invalide
+<<1/3=1/3>>   valide
+<<1+1/2=3/2>> valide
 ```
 
-Les fractions sont donc acceptées dans l’expression, mais pas dans le résultat
-annoncé.
+Les fractions sont acceptées dans l’expression et dans le résultat annoncé.
+Elles sont comparées exactement avec `Fraction`, puis exposées sous la même
+forme normalisée que les autres valeurs numériques.
 
 Le prompt d’entraînement demande uniquement les opérateurs `+`, `-`, `*` et
 `/`. Le parseur accepte également `//`. Une modification du parseur ne modifie

@@ -8,7 +8,7 @@ import torch
 import src.tokenizer as tokenizer_module
 from src.config import CONFIG
 from src.data.formatting import format_training_example
-from src.evaluation import extract_final_answer
+from src.evaluation import extract_final_answer, parse_annotated_formulas
 from src.model import factory
 
 
@@ -76,6 +76,19 @@ def test_tokenizer_loader(monkeypatch: Any) -> None:
 
 def test_final_answer_parsing() -> None:
     assert extract_final_answer("Reasoning: 6 × 7 = 42.\n#### 42") == "42"
+
+    accepted_approximations = (
+        "<<1/3=.3>>",
+        "<<1/3=0.33>>",
+        "<<1/3=0.333>>",
+        "<<6/7=0.857142857>>",
+        "<<6/7=0.86>>",
+    )
+    assert all(
+        parse_annotated_formulas(annotation)[0].is_correct
+        for annotation in accepted_approximations
+    )
+    assert not parse_annotated_formulas("<<6/7=0.87>>")[0].is_correct
 
 
 def test_mock_question_uses_the_frozen_prompt() -> None:

@@ -10,9 +10,9 @@ from fractions import Fraction
 from typing import Any
 
 from src.evaluation.numeric import (
-    NUMBER_PATTERN,
     normalize_fraction,
     numeric_prediction_matches_fraction,
+    parse_numeric_fraction,
 )
 
 FORMULA_PATTERN = re.compile(r"<<(.*?)(>>|$)", re.DOTALL)
@@ -68,28 +68,6 @@ class FormulaAnalysis:
             **asdict(self),
             "is_correct": self.is_correct,
         }
-
-
-def _normalize_decimal(value: Decimal) -> str:
-    if not value.is_finite():
-        raise FormulaParseError("non-finite numeric value")
-
-    normalized = format(value, "f")
-    if "." in normalized:
-        normalized = normalized.rstrip("0").rstrip(".")
-    return "0" if value == 0 else normalized
-
-
-def _parse_numeric_value(value: str) -> Decimal | None:
-    candidate = value.strip()
-    if NUMBER_PATTERN.fullmatch(candidate) is None:
-        return None
-
-    try:
-        number = Decimal(candidate.replace(",", ""))
-    except DecimalException:
-        return None
-    return number if number.is_finite() else None
 
 
 def _remove_thousands_separators(expression: str) -> str:
@@ -197,7 +175,7 @@ def _analyze_formula(raw: str, content: str) -> FormulaAnalysis:
         )
 
     expression, claimed_text = (part.strip() for part in content.rsplit("=", 1))
-    claimed_number = _parse_numeric_value(claimed_text)
+    claimed_number = parse_numeric_fraction(claimed_text)
     if not expression or claimed_number is None:
         return FormulaAnalysis(
             raw=raw,
@@ -210,7 +188,7 @@ def _analyze_formula(raw: str, content: str) -> FormulaAnalysis:
             error="invalid_claimed_result" if expression else "empty_expression",
         )
 
-    claimed_result = _normalize_decimal(claimed_number)
+    claimed_result = normalize_fraction(claimed_number)
     try:
         normalized_expression, tree = _parse_expression(expression)
     except FormulaParseError:
