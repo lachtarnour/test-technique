@@ -1,4 +1,4 @@
-"""Load raw or frozen GSM8K datasets."""
+"""Load original or frozen GSM8K dataset splits."""
 
 from __future__ import annotations
 

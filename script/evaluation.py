@@ -13,17 +13,19 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.cli import positive_int
 from src.config import CONFIG
-from src.evaluation import (
+from src.evaluation.diagnostics import select_evaluation_metrics
+from src.evaluation.runners import (
     evaluate_checkpoint,
     evaluate_pretrained_model,
 )
-from src.evaluation.diagnostics import select_evaluation_metrics
 from src.tracking import (
     WANDB_MODES,
     finish_wandb_run,
     initialize_wandb_run,
     log_wandb_metrics,
 )
+
+# Command-line contract
 
 
 def parse_args() -> argparse.Namespace:
@@ -78,6 +80,9 @@ def parse_args() -> argparse.Namespace:
         help="Use offline to defer upload, or disabled to turn W&B off.",
     )
     return parser.parse_args()
+
+
+# Evaluation workflow
 
 
 def main() -> None:

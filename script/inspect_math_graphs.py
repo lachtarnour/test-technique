@@ -13,14 +13,16 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.cli import positive_int
 from src.config import CONFIG
-from src.data.graph_audit import audit_graph_rows
-from src.load_data import load_frozen_gsm8k_split
+from src.data.graph.audit import audit_graph_rows
+from src.data.loading import load_frozen_gsm8k_split
+
+# Command-line contract
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Build and execute conservative V1 calculation graphs in parallel."
+            "Build, compile, and exactly verify V1 calculation graphs in parallel."
         )
     )
     parser.add_argument(
@@ -38,6 +40,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=CONFIG.seed)
     parser.add_argument("--output-file", type=Path, default=None)
     return parser.parse_args()
+
+
+# Audit workflow
 
 
 def main() -> None:
@@ -76,6 +81,18 @@ def main() -> None:
     )
     print(json.dumps(report["summary"], ensure_ascii=False, indent=2))
     print(f"Full graph audit saved to {output_file}")
+    structure_issue_count = report["summary"]["program_structure_issues"]
+    if structure_issue_count:
+        raise RuntimeError(
+            "Postfix structural validation failed: "
+            f"{structure_issue_count} issues were detected."
+        )
+    mismatch_count = report["summary"]["program_result_mismatches"]
+    if mismatch_count:
+        raise RuntimeError(
+            "Postfix verification failed: "
+            f"{mismatch_count} program results differ from the graph executor."
+        )
 
 
 if __name__ == "__main__":

@@ -7,7 +7,19 @@ from dataclasses import replace
 from decimal import Decimal
 from fractions import Fraction
 
-from src.data.schemas import (
+from src.evaluation.answers import extract_final_answer
+from src.evaluation.arithmetic import (
+    FORMULA_PATTERN,
+    THOUSANDS_VALUE_PATTERN,
+    parse_annotated_formulas,
+)
+from src.evaluation.numeric import (
+    normalize_fraction,
+    numeric_prediction_matches_fraction,
+    parse_numeric_fraction,
+)
+
+from .schemas import (
     ArithmeticOperator,
     ExpressionNode,
     MathStep,
@@ -15,17 +27,6 @@ from src.data.schemas import (
     OperationNode,
     SourceSpan,
     SyntacticExpressionNode,
-)
-from src.evaluation.arithmetic import (
-    FORMULA_PATTERN,
-    THOUSANDS_VALUE_PATTERN,
-    parse_annotated_formulas,
-)
-from src.evaluation.generation import extract_final_answer
-from src.evaluation.numeric import (
-    normalize_fraction,
-    numeric_prediction_matches_fraction,
-    parse_numeric_fraction,
 )
 
 _BINARY_OPERATORS: dict[type[ast.operator], ArithmeticOperator] = {
@@ -175,9 +176,7 @@ def parse_math_steps(answer: str) -> list[MathStep]:
             content_start=match.start(1),
         )
         claimed_result = (
-            parse_numeric_fraction(claimed_text)
-            if claimed_text is not None
-            else None
+            parse_numeric_fraction(claimed_text) if claimed_text is not None else None
         )
         expression_tree: SyntacticExpressionNode | None = None
         target_result: Fraction | None = None

@@ -1,9 +1,9 @@
 # Fine-tuning de Qwen2.5 sur GSM8K
 
 Ce dépôt contient une expérience de fine-tuning de
-[`[Qwen/Qwen2.5-1.5B-Instruct](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct)`](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct)
+[Qwen/Qwen2.5-1.5B-Instruct](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct)
 avec LoRA sur le dataset
-[`[openai/gsm8k](https://huggingface.co/datasets/openai/gsm8k)`](https://huggingface.co/datasets/openai/gsm8k).
+[openai/gsm8k](https://huggingface.co/datasets/openai/gsm8k).
 
 L’objectif est de comparer le modèle d’origine au modèle adapté, en évaluant
 séparément :
@@ -42,8 +42,8 @@ Le pipeline comprend :
 * un parseur arithmétique basé sur l’AST Python, sans appel à `eval` ;
 * un suivi optionnel des expériences avec Weights & Biases.
 
-Le dépôt contient également quatre smoke tests portant sur le forward du
-modèle, le tokenizer, le parsing arithmétique et la construction des prompts.
+La suite de tests couvre le modèle, le tokenizer, les données, l’entraînement,
+l’évaluation, le graphe arithmétique et le compilateur postfixé.
 
 ## Configuration de référence
 
@@ -183,12 +183,15 @@ uv run pytest
 ## Organisation du dépôt
 
 ```text
-configs/        configuration des expériences
-documentation/  documentation du parsing et des métriques
-script/         scripts d’entraînement, d’évaluation et de préparation
-src/data/       formatage, tokenisation et collateur
-src/model/      chargement du modèle et configuration LoRA
-src/training/   loss, Trainer et planning d’évaluation
-src/evaluation/ génération, parsing et calcul des métriques
-tests/          smoke tests
+configs/              recettes d’expériences
+documentation/        contrats du parsing, des métriques et du graphe
+script/               points d’entrée exécutables
+src/data/loading.py   chargement des splits GSM8K
+src/data/splits.py    création déterministe des splits gelés
+src/data/language/    formatage, tokenisation et batches du LLM
+src/data/graph/       parsing, graphe, exécution, programme postfixé et audit
+src/model/            modèle, tokenizer, dtype et têtes auxiliaires
+src/training/         configuration, objectifs, callbacks et Trainer
+src/evaluation/       réponses, génération et métriques
+tests/                tests unitaires et d’intégration
 ```

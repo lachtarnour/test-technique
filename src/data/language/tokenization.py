@@ -1,4 +1,4 @@
-"""Explicit completion-only tokenization for the controlled A1 baseline."""
+"""Explicit completion-only tokenization for language-model training."""
 
 from __future__ import annotations
 
@@ -90,5 +90,5 @@ def tokenize_dataset_split(
         ),
         remove_columns=dataset.column_names,
         keep_in_memory=True,
-        desc="Tokenizing GSM8K for A1-control",
+        desc="Tokenizing GSM8K for training",
     )

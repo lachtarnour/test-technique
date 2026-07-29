@@ -1,1 +1,1 @@
-"""Trainer and objective boundaries established by the A1 baseline."""
+"""Experiment configuration, scientific objectives and training infrastructure."""

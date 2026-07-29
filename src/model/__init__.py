@@ -1,1 +1,1 @@
-"""Model construction kept separate from Trainer orchestration."""
+"""Model construction, tokenization and auxiliary prediction heads."""

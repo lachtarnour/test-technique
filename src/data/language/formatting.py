@@ -1,4 +1,4 @@
-"""Minimal prompt/completion formatting for the A1 baseline."""
+"""Prompt/completion formatting for language-model training."""
 
 from __future__ import annotations
 

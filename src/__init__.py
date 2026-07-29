@@ -1,1 +1,1 @@
-"""Utilities for the Qwen LoRA fine-tuning demo."""
+"""Qwen GSM8K training and evaluation package."""

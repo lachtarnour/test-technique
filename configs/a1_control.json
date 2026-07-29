@@ -1,4 +1,10 @@
 {
   "experiment_id": "A1-control",
-  "objective": "causal_language_modeling"
+  "losses": [
+    {
+      "name": "language",
+      "mode": "standard",
+      "weight": 1.0
+    }
+  ]
 }

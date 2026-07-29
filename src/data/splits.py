@@ -1,4 +1,4 @@
-"""Create the frozen GSM8K train/validation/test dataset."""
+"""Create deterministic frozen GSM8K train/validation/test splits."""
 
 from __future__ import annotations
 

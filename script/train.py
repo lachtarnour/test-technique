@@ -1,4 +1,4 @@
-"""Fine-tune the A1 LoRA baseline and evaluate generated answers."""
+"""Fine-tune one configured LoRA experiment and evaluate generated answers."""
 
 from __future__ import annotations
 
@@ -18,12 +18,12 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.cli import positive_float, positive_int
 from src.config import CONFIG
-from src.data.dataset import prepare_tokenized_dataset
-from src.evaluation import evaluate_model
+from src.data.language.dataset import prepare_tokenized_dataset
+from src.data.loading import load_frozen_gsm8k_split
 from src.evaluation.diagnostics import select_evaluation_metrics
-from src.load_data import load_frozen_gsm8k_split
+from src.evaluation.runners import evaluate_model
 from src.model.factory import build_language_model
-from src.tokenizer import load_tokenizer
+from src.model.tokenizer import load_tokenizer
 from src.tracking import (
     WANDB_MODES,
     finish_wandb_run,
@@ -34,6 +34,7 @@ from src.training.arguments import load_experiment_config
 from src.training.factory import (
     build_training_arguments,
     build_training_trainer,
+    validate_tokenized_dataset,
 )
 from src.training.periodic_evaluation import (
     PERIODIC_EVAL_BATCH_SIZE,
@@ -43,18 +44,21 @@ from src.training.periodic_evaluation import (
     load_fixed_periodic_evaluation_datasets,
     periodic_evaluation_metadata,
 )
+from src.training.plan import compile_experiment
 from src.training.trainer import release_training_memory
+
+# Command-line contract
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Fine-tune the completion-only A1 LoRA baseline."
+        description="Fine-tune a declarative LoRA reasoning experiment."
     )
     parser.add_argument(
         "--config",
         type=Path,
         default=Path("configs/a1_control.json"),
-        help="A1 scientific experiment configuration.",
+        help="Scientific experiment configuration.",
     )
     parser.add_argument("--model-name", default=CONFIG.model_name)
     parser.add_argument(
@@ -156,6 +160,9 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+# Report helpers
+
+
 def _json_safe(metrics: dict[str, Any]) -> dict[str, Any]:
     """Keep scalar Trainer metrics suitable for a JSON report."""
     cleaned: dict[str, Any] = {}
@@ -191,6 +198,9 @@ def _cuda_memory_metrics() -> dict[str, int | float] | None:
     }
 
 
+# Training workflow
+
+
 def main() -> None:
     args = parse_args()
     disable_progress_bars()
@@ -201,6 +211,7 @@ def main() -> None:
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     experiment_config = load_experiment_config(args.config)
+    experiment_plan = compile_experiment(experiment_config)
     wandb_run_name = args.wandb_run_name or experiment_config.experiment_id
     wandb_run = initialize_wandb_run(
         project=args.wandb_project,
@@ -211,6 +222,7 @@ def main() -> None:
             "model_name": args.model_name,
             "wandb_run_name": wandb_run_name,
             "experiment": experiment_config.to_dict(),
+            "experiment_plan": experiment_plan.to_dict(),
             "experiment_config_file": str(args.config),
             "data_dir": str(args.data_dir),
             "max_length": args.max_length,
@@ -245,6 +257,10 @@ def main() -> None:
         validation_subset_size=args.validation_subset_size,
         seed=args.seed,
     )
+    validate_tokenized_dataset(
+        dataset,
+        required_columns=experiment_plan.required_columns,
+    )
     periodic_evaluation_datasets = load_fixed_periodic_evaluation_datasets(
         args.data_dir
     )
@@ -260,7 +276,10 @@ def main() -> None:
             {"periodic_evaluation": periodic_configuration},
             allow_val_change=True,
         )
-    model = build_language_model(model_name=args.model_name)
+    model = build_language_model(
+        model_name=args.model_name,
+        head_names=experiment_plan.head_names,
+    )
     model_dtype = str(next(model.parameters()).dtype)
     training_arguments = build_training_arguments(
         output_dir=args.output_dir,
@@ -273,7 +292,6 @@ def main() -> None:
         logging_steps=args.logging_steps,
         validation_every_epochs=args.validation_every_epochs,
         log_every_epochs=args.log_every_epochs,
-        eval_every=args.eval_every,
         run_name=wandb_run_name,
         report_to_wandb=wandb_run is not None,
         seed=args.seed,
@@ -281,14 +299,14 @@ def main() -> None:
     periodic_evaluation_callback = PeriodicGenerationEvaluationCallback(
         datasets=periodic_evaluation_datasets,
         tokenizer=tokenizer,
-        eval_every=training_arguments.eval_every,
+        eval_every=args.eval_every,
         batch_size=args.periodic_eval_batch_size,
         max_new_tokens=args.max_new_tokens,
         wandb_run=wandb_run,
     )
     trainer = build_training_trainer(
         model=model,
-        experiment_config=experiment_config,
+        experiment_plan=experiment_plan,
         dataset=dataset,
         tokenizer=tokenizer,
         training_arguments=training_arguments,
@@ -324,8 +342,9 @@ def main() -> None:
 
     report = {
         "model": args.model_name,
-        "method": "A1-control LoRA SFT",
+        "method": f"{experiment_config.experiment_id} LoRA SFT",
         "experiment": experiment_config.to_dict(),
+        "experiment_plan": experiment_plan.to_dict(),
         "experiment_config_file": str(args.config),
         "prompt": {
             "version": CONFIG.prompt_version,

@@ -1,9 +1,8 @@
-"""Answer extraction, model generation and model-loading helpers."""
+"""Model response generation and model-loading helpers."""
 
 from __future__ import annotations
 
 import json
-import re
 import threading
 import time
 from collections.abc import Mapping
@@ -11,22 +10,14 @@ from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
 from src.config import CONFIG
-from src.device import cuda_supports_native_bf16
-from src.evaluation.numeric import (
-    NUMERIC_OR_FRACTION_PATTERN,
-    normalize_numeric_value,
-)
+from src.evaluation.answers import extract_final_answer
+from src.model.device import cuda_supports_native_bf16
 
 if TYPE_CHECKING:
     from datasets import Dataset
 else:
     Dataset = Any
 
-VALUE_BOUNDARY = r"(?![\w/-]|\.\d)"
-TERMINAL_ANSWER_PATTERN = re.compile(rf"####\s*({NUMERIC_OR_FRACTION_PATTERN})\s*\Z")
-STANDALONE_VALUE_PATTERN = re.compile(
-    rf"(?<![\w.-])({NUMERIC_OR_FRACTION_PATTERN}){VALUE_BOUNDARY}"
-)
 PROGRESS_HEARTBEAT_SECONDS = 30.0
 
 
@@ -85,20 +76,6 @@ def _generation_heartbeat(
     finally:
         stop_event.set()
         reporter.join()
-
-
-def extract_final_answer(text: str, *, require_marker: bool = True) -> str | None:
-    """Extract a terminal marked answer or the last standalone numeric value."""
-    terminal_match = TERMINAL_ANSWER_PATTERN.search(text)
-    if terminal_match is not None:
-        return normalize_numeric_value(terminal_match.group(1))
-    if require_marker:
-        return None
-
-    matches = STANDALONE_VALUE_PATTERN.findall(text)
-    if not matches:
-        return None
-    return normalize_numeric_value(matches[-1])
 
 
 def _model_device(model: Any) -> Any:
@@ -304,6 +281,33 @@ def generate_model_responses(
     }
 
 
+def _resolve_evaluation_dataset(
+    dataset: Dataset | None,
+    *,
+    split: str,
+    dataset_path: str,
+    subset_size: int | None,
+    seed: int,
+) -> Dataset:
+    if dataset is not None:
+        return dataset
+
+    from src.data.loading import load_frozen_gsm8k_split, load_gsm8k_dataset
+
+    if split in {"train", "validation", "test"}:
+        return load_frozen_gsm8k_split(
+            split,
+            dataset_path=dataset_path,
+            subset_size=subset_size,
+            seed=seed,
+        )
+    return load_gsm8k_dataset(
+        split=split,
+        subset_size=subset_size,
+        seed=seed,
+    )
+
+
 def generate_pretrained_responses(
     model_name: str,
     *,
@@ -319,8 +323,7 @@ def generate_pretrained_responses(
     import torch
     from transformers import AutoModelForCausalLM
 
-    from src.load_data import load_frozen_gsm8k_split, load_gsm8k_dataset
-    from src.tokenizer import load_tokenizer
+    from src.model.tokenizer import load_tokenizer
 
     revision = (model_kwargs or {}).get("revision")
     tokenizer = load_tokenizer(
@@ -332,21 +335,13 @@ def generate_pretrained_responses(
         model_name,
         **_model_loading_options(torch, model_kwargs),
     )
-    if dataset is not None:
-        evaluation_dataset = dataset
-    elif split in {"train", "validation", "test"}:
-        evaluation_dataset = load_frozen_gsm8k_split(
-            split,
-            dataset_path=dataset_path,
-            subset_size=subset_size,
-            seed=seed,
-        )
-    else:
-        evaluation_dataset = load_gsm8k_dataset(
-            split=split,
-            subset_size=subset_size,
-            seed=seed,
-        )
+    evaluation_dataset = _resolve_evaluation_dataset(
+        dataset,
+        split=split,
+        dataset_path=dataset_path,
+        subset_size=subset_size,
+        seed=seed,
+    )
     return generate_model_responses(
         model,
         tokenizer,
@@ -372,28 +367,18 @@ def generate_checkpoint_responses(
     from peft import AutoPeftModelForCausalLM
     from transformers import AutoTokenizer
 
-    from src.load_data import load_frozen_gsm8k_split, load_gsm8k_dataset
-
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_path or checkpoint_path)
     model = AutoPeftModelForCausalLM.from_pretrained(
         checkpoint_path,
         **_model_loading_options(torch, model_kwargs),
     )
-    if dataset is not None:
-        evaluation_dataset = dataset
-    elif split in {"train", "validation", "test"}:
-        evaluation_dataset = load_frozen_gsm8k_split(
-            split,
-            dataset_path=dataset_path,
-            subset_size=subset_size,
-            seed=seed,
-        )
-    else:
-        evaluation_dataset = load_gsm8k_dataset(
-            split=split,
-            subset_size=subset_size,
-            seed=seed,
-        )
+    evaluation_dataset = _resolve_evaluation_dataset(
+        dataset,
+        split=split,
+        dataset_path=dataset_path,
+        subset_size=subset_size,
+        seed=seed,
+    )
     return generate_model_responses(
         model,
         tokenizer,

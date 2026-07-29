@@ -14,9 +14,9 @@ from datasets import Dataset
 from transformers import TrainerCallback, TrainerControl, TrainerState
 
 from src.config import CONFIG
-from src.evaluation import evaluate_model
+from src.data.loading import load_frozen_gsm8k_split
 from src.evaluation.diagnostics import select_evaluation_metrics
-from src.load_data import load_frozen_gsm8k_split
+from src.evaluation.runners import evaluate_model
 
 PERIODIC_EVAL_SAMPLES_PER_SPLIT = 300
 PERIODIC_EVAL_BATCH_SIZE = 300

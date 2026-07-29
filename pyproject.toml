@@ -3,7 +3,9 @@ name = "qwen-gsm8k"
 version = "0.1.0"
 description = "Evaluation and LoRA fine-tuning of Qwen2.5 on GSM8K"
 requires-python = ">=3.10,<3.14"
-dependencies = []
+dependencies = [
+    "text2num>=3.0.2,<4.0.0",
+]
 
 # Keep one dependency manifest while retaining small, purpose-built environments.
 # Groups are nested so that shared versions are declared only once.

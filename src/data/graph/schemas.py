@@ -1,4 +1,4 @@
-"""Non-semantic arithmetic schemas used by the V1 training pipeline."""
+"""Core schemas for the non-semantic V1 calculation graph."""
 
 from __future__ import annotations
 
@@ -18,6 +18,13 @@ class ArithmeticOperator(str, Enum):
     FLOOR_DIVIDE = "floor_div"
     POSITIVE = "pos"
     NEGATE = "neg"
+
+    @property
+    def supervision_operator(self) -> ArithmeticOperator:
+        """Merge floor division into the division supervision class."""
+        if self is self.FLOOR_DIVIDE:
+            return self.DIVIDE
+        return self
 
     @property
     def arity(self) -> int:
@@ -45,7 +52,8 @@ class SourceSpan:
         return {"start": self.start, "end": self.end}
 
 
-def _fraction_to_dict(value: Fraction | None) -> dict[str, int] | None:
+def fraction_to_dict(value: Fraction | None) -> dict[str, int] | None:
+    """Return the shared JSON representation of one exact fraction."""
     if value is None:
         return None
     return {
@@ -64,7 +72,7 @@ class NumberNode:
         """Return a JSON-serializable representation."""
         return {
             "kind": "number",
-            "value": _fraction_to_dict(self.value),
+            "value": fraction_to_dict(self.value),
         }
 
 
@@ -80,7 +88,7 @@ class ProblemNumberNode:
         """Return a JSON-serializable representation."""
         return {
             "kind": "problem_number",
-            "value": _fraction_to_dict(self.value),
+            "value": fraction_to_dict(self.value),
             "source_span": self.source_span.to_dict(),
             "source_text": self.source_text,
         }
@@ -102,7 +110,7 @@ class ReferenceNode:
         return {
             "kind": "reference",
             "step_index": self.step_index,
-            "value": _fraction_to_dict(self.value),
+            "value": fraction_to_dict(self.value),
         }
 
 
@@ -119,7 +127,7 @@ class LiteralNode:
         """Return a JSON-serializable representation."""
         return {
             "kind": "literal",
-            "value": _fraction_to_dict(self.value),
+            "value": fraction_to_dict(self.value),
         }
 
 
@@ -140,7 +148,7 @@ class UnresolvedNode:
         """Return a JSON-serializable representation."""
         return {
             "kind": "unresolved",
-            "value": _fraction_to_dict(self.value),
+            "value": fraction_to_dict(self.value),
             "candidates": [candidate.to_dict() for candidate in self.candidates],
         }
 
@@ -163,7 +171,7 @@ class OperationNode:
         """Return a JSON-serializable representation."""
         return {
             "kind": "operation",
-            "operator": self.operator.value,
+            "operator": self.operator.supervision_operator.value,
             "operands": [operand.to_dict() for operand in self.operands],
         }
 
@@ -178,11 +186,7 @@ ExpressionNode = (
 )
 SyntacticExpressionNode = NumberNode | OperationNode
 GraphExpressionNode = (
-    ProblemNumberNode
-    | ReferenceNode
-    | LiteralNode
-    | UnresolvedNode
-    | OperationNode
+    ProblemNumberNode | ReferenceNode | LiteralNode | UnresolvedNode | OperationNode
 )
 
 
@@ -232,7 +236,7 @@ class MathStep:
     def operator(self) -> ArithmeticOperator | None:
         """Return the root operator used as the step-level operator label."""
         if isinstance(self.expression_tree, OperationNode):
-            return self.expression_tree.operator
+            return self.expression_tree.operator.supervision_operator
         return None
 
     def to_dict(self) -> dict[str, Any]:
@@ -253,8 +257,8 @@ class MathStep:
                 if self.claimed_result_span is not None
                 else None
             ),
-            "claimed_result": _fraction_to_dict(self.claimed_result),
-            "target_result": _fraction_to_dict(self.target_result),
+            "claimed_result": fraction_to_dict(self.claimed_result),
+            "target_result": fraction_to_dict(self.target_result),
             "expression_tree": (
                 self.expression_tree.to_dict()
                 if self.expression_tree is not None
@@ -303,7 +307,7 @@ class GraphStep:
         return {
             "index": self.index,
             "expression": self.expression,
-            "target_result": _fraction_to_dict(self.target_result),
+            "target_result": fraction_to_dict(self.target_result),
             "expression_tree": (
                 self.expression_tree.to_dict()
                 if self.expression_tree is not None
@@ -342,8 +346,7 @@ class CalculationGraph:
         """Return a JSON-serializable representation."""
         return {
             "problem_numbers": [
-                problem_number.to_dict()
-                for problem_number in self.problem_numbers
+                problem_number.to_dict() for problem_number in self.problem_numbers
             ],
             "steps": [step.to_dict() for step in self.steps],
             "unresolved_operand_count": self.unresolved_operand_count,

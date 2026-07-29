@@ -5,10 +5,11 @@ from typing import Any
 
 import torch
 
-import src.tokenizer as tokenizer_module
+import src.model.tokenizer as tokenizer_module
 from src.config import CONFIG
-from src.data.formatting import format_training_example
-from src.evaluation import extract_final_answer, parse_annotated_formulas
+from src.data.language.formatting import format_training_example
+from src.evaluation.answers import extract_final_answer
+from src.evaluation.arithmetic import parse_annotated_formulas
 from src.model import factory
 
 

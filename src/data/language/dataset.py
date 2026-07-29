@@ -1,4 +1,4 @@
-"""End-to-end construction of the explicit A1 tokenized dataset."""
+"""End-to-end construction of the stable tokenized language dataset."""
 
 from __future__ import annotations
 
@@ -9,9 +9,10 @@ from datasets import Dataset, DatasetDict
 from transformers import PreTrainedTokenizerBase
 
 from src.config import CONFIG
-from src.data.formatting import format_training_example
-from src.data.tokenization import tokenize_dataset_split
-from src.load_data import load_frozen_gsm8k_split
+from src.data.loading import load_frozen_gsm8k_split
+
+from .formatting import format_training_example
+from .tokenization import tokenize_dataset_split
 
 LOGGER = logging.getLogger(__name__)
 
@@ -26,14 +27,14 @@ def _prepare_split(
         format_training_example,
         remove_columns=dataset.column_names,
         keep_in_memory=True,
-        desc="Formatting GSM8K for A1-control",
+        desc="Formatting GSM8K for training",
     )
     tokenized = tokenize_dataset_split(
         formatted,
         tokenizer=tokenizer,
         max_length=max_length,
     )
-    LOGGER.info("Prepared %s completion-only examples.", f"{len(tokenized):,}")
+    LOGGER.info("Prepared %s language-training examples.", f"{len(tokenized):,}")
     return tokenized
 
 

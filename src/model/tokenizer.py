@@ -1,7 +1,7 @@
 """Load and validate the shared Qwen tokenizer.
 
 Training-specific rendering, masking, offsets, and truncation live in
-``src.data.tokenization``. This module remains deliberately small because the
+``src.data.language.tokenization``. This module remains deliberately small because the
 frozen evaluation pipeline also uses the same tokenizer factory.
 """
 

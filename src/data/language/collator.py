@@ -1,4 +1,4 @@
-"""Dynamic padding for explicitly tokenized A1 examples."""
+"""Dynamic padding for tokenized language-model examples."""
 
 from __future__ import annotations
 

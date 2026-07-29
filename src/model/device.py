@@ -1,4 +1,4 @@
-"""CUDA capability helpers shared by training and evaluation."""
+"""CUDA capability helpers for model loading and training."""
 
 from __future__ import annotations
 

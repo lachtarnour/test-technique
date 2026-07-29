@@ -1,4 +1,4 @@
-"""Build the common Hugging Face training infrastructure."""
+"""Build common Hugging Face infrastructure from a compiled experiment plan."""
 
 from __future__ import annotations
 
@@ -11,24 +11,23 @@ from datasets import DatasetDict
 from transformers import PrinterCallback, TrainerCallback
 
 from src.config import CONFIG
-from src.data.collator import CompletionOnlyDataCollator
-from src.device import cuda_supports_native_bf16
-from src.training.arguments import (
-    CAUSAL_LANGUAGE_MODELING,
-    ExperimentConfig,
-    ExperimentTrainingArguments,
+from src.data.language.collator import CompletionOnlyDataCollator
+from src.model.device import cuda_supports_native_bf16
+from src.training.arguments import ExperimentTrainingArguments
+from src.training.callbacks import EpochIntervalCallback, StructuredLoggingCallback
+from src.training.plan import (
+    BASE_MODEL_COLUMNS,
+    ExperimentPlan,
+    build_objective,
 )
-from src.training.objective import CausalLanguageModelingObjective
-from src.training.trainer import (
-    EpochIntervalCallback,
-    MathConsistencyTrainer,
-    StructuredLoggingCallback,
-)
-
-REQUIRED_COLUMNS = frozenset({"input_ids", "attention_mask", "labels"})
+from src.training.trainer import MathConsistencyTrainer
 
 
-def validate_tokenized_dataset(dataset: DatasetDict) -> None:
+def validate_tokenized_dataset(
+    dataset: DatasetDict,
+    *,
+    required_columns: frozenset[str] = BASE_MODEL_COLUMNS,
+) -> None:
     """Fail early if a split cannot enter the common Trainer."""
     missing_splits = {"train", "validation"} - set(dataset)
     if missing_splits:
@@ -37,7 +36,7 @@ def validate_tokenized_dataset(dataset: DatasetDict) -> None:
         split = dataset[split_name]
         if not len(split):
             raise ValueError(f"The {split_name!r} split must not be empty.")
-        missing_columns = REQUIRED_COLUMNS - set(split.column_names)
+        missing_columns = required_columns - set(split.column_names)
         if missing_columns:
             raise ValueError(
                 f"Missing tokenized columns in {split_name!r}: "
@@ -57,7 +56,6 @@ def build_training_arguments(
     logging_steps: int = 10,
     validation_every_epochs: int = 1,
     log_every_epochs: int = 1,
-    eval_every: int = 2,
     run_name: str | None = None,
     report_to_wandb: bool = True,
     seed: int = CONFIG.seed,
@@ -77,13 +75,9 @@ def build_training_arguments(
         "logging_steps": logging_steps,
         "validation_every_epochs": validation_every_epochs,
         "log_every_epochs": log_every_epochs,
-        "eval_every": eval_every,
     }
     for name, value in positive_values.items():
-        if (
-            name.endswith("_every_epochs")
-            or name in {"eval_every", "logging_steps"}
-        ) and (
+        if (name.endswith("_every_epochs") or name == "logging_steps") and (
             isinstance(value, bool) or not isinstance(value, int)
         ):
             raise ValueError(f"{name} must be a strictly positive integer.")
@@ -127,23 +121,23 @@ def build_training_arguments(
         run_name=run_name,
         validation_every_epochs=validation_every_epochs,
         log_every_epochs=log_every_epochs,
-        eval_every=eval_every,
     )
 
 
 def build_training_trainer(
     *,
     model: torch.nn.Module,
-    experiment_config: ExperimentConfig,
     dataset: DatasetDict,
     tokenizer: Any,
     training_arguments: ExperimentTrainingArguments,
+    experiment_plan: ExperimentPlan,
     callbacks: list[TrainerCallback] | None = None,
 ) -> MathConsistencyTrainer:
-    """Build A1 through the objective-injection seam used later."""
-    validate_tokenized_dataset(dataset)
-    if experiment_config.objective != CAUSAL_LANGUAGE_MODELING:
-        raise ValueError(f"Unsupported objective: {experiment_config.objective}")
+    """Build the single Trainer used by every implemented loss recipe."""
+    validate_tokenized_dataset(
+        dataset,
+        required_columns=experiment_plan.required_columns,
+    )
     if tokenizer.pad_token_id is None:
         raise ValueError("The tokenizer must define pad_token_id.")
     trainer = MathConsistencyTrainer(
@@ -153,7 +147,8 @@ def build_training_trainer(
         eval_dataset=dataset["validation"],
         data_collator=CompletionOnlyDataCollator(pad_token_id=tokenizer.pad_token_id),
         processing_class=tokenizer,
-        objective=CausalLanguageModelingObjective(),
+        objective=build_objective(experiment_plan.config),
+        experiment_plan=experiment_plan,
         callbacks=[
             StructuredLoggingCallback(),
             EpochIntervalCallback(

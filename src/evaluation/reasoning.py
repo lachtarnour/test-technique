@@ -6,11 +6,11 @@ from collections.abc import Mapping
 from typing import Any
 
 from src.config import CONFIG
+from src.evaluation.answers import extract_final_answer
 from src.evaluation.arithmetic import (
     SUPPORTED_OPERATOR_SYMBOLS,
     parse_annotated_formulas,
 )
-from src.evaluation.generation import extract_final_answer
 from src.evaluation.numeric import (
     MAX_SYMMETRIC_RELATIVE_ERROR,
     REPEATING_DECIMAL_PLACES,

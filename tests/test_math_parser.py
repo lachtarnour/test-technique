@@ -7,12 +7,12 @@ from fractions import Fraction
 
 import pytest
 
-from src.data.math_parser import (
+from src.data.graph.parser import (
     evaluate_expression_tree,
     parse_expression_tree,
     parse_math_steps,
 )
-from src.data.schemas import (
+from src.data.graph.schemas import (
     ArithmeticOperator,
     NumberNode,
     OperationNode,
@@ -55,9 +55,7 @@ def test_parser_builds_the_four_frankie_steps() -> None:
 
 
 def test_parser_preserves_exact_targets_for_fractional_claims() -> None:
-    steps = parse_math_steps(
-        "Exact <<1/3=1/3>> and approximate <<1/3=.3>>.\n#### .3"
-    )
+    steps = parse_math_steps("Exact <<1/3=1/3>> and approximate <<1/3=.3>>.\n#### .3")
 
     assert len(steps) == 2
     assert steps[0].claimed_result == Fraction(1, 3)
@@ -85,6 +83,19 @@ def test_nested_expression_tree_is_exact_and_non_semantic() -> None:
         ),
     )
     assert evaluate_expression_tree(tree) == Fraction(3, 2)
+
+
+def test_floor_division_executes_by_floor_but_uses_the_division_label() -> None:
+    tree = parse_expression_tree("7//2")
+    step = parse_math_steps("Calculate <<7//2=3>>.\n#### 3")[0]
+
+    assert isinstance(tree, OperationNode)
+    assert tree.operator is ArithmeticOperator.FLOOR_DIVIDE
+    assert evaluate_expression_tree(tree) == Fraction(3)
+    assert step.valid is True
+    assert step.operator is ArithmeticOperator.DIVIDE
+    assert step.to_dict()["operator"] == "div"
+    assert step.to_dict()["expression_tree"]["operator"] == "div"
 
 
 def test_parser_records_exact_source_spans() -> None:

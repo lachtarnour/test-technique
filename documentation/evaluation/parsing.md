@@ -225,7 +225,7 @@ unclosed_annotation
 
 ## Fichiers concernés
 
-- `src/evaluation/generation.py` : extraction de la réponse finale ;
+- `src/evaluation/answers.py` : extraction de la réponse finale ;
 - `src/evaluation/numeric.py` : parsing des nombres et des fractions ;
 - `src/evaluation/arithmetic.py` : extraction, validation AST et exécution des
   annotations.
