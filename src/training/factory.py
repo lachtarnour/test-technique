@@ -1,25 +1,26 @@
-"""Build common Hugging Face infrastructure from a compiled experiment plan."""
+"""Build the common Hugging Face infrastructure for one selected ablation."""
 
 from __future__ import annotations
 
 import math
+from functools import partial
 from pathlib import Path
 from typing import Any
 
 import torch
 from datasets import DatasetDict
-from transformers import PrinterCallback, TrainerCallback
+from transformers import (
+    EarlyStoppingCallback,
+    PrinterCallback,
+    TrainerCallback,
+    TrainingArguments,
+)
 
 from src.config import CONFIG
-from src.data.language.collator import CompletionOnlyDataCollator
+from src.data.features import BASE_MODEL_COLUMNS
+from src.data.language.collator import collate_completion_only
 from src.model.device import cuda_supports_native_bf16
-from src.training.arguments import ExperimentTrainingArguments
 from src.training.callbacks import EpochIntervalCallback, StructuredLoggingCallback
-from src.training.plan import (
-    BASE_MODEL_COLUMNS,
-    ExperimentPlan,
-    build_objective,
-)
 from src.training.trainer import MathConsistencyTrainer
 
 
@@ -47,19 +48,19 @@ def validate_tokenized_dataset(
 def build_training_arguments(
     *,
     output_dir: str | Path,
-    num_train_epochs: float = 1.0,
+    num_train_epochs: float = CONFIG.num_train_epochs,
     max_steps: int | None = None,
-    train_batch_size: int = 8,
-    eval_batch_size: int = 16,
-    gradient_accumulation_steps: int = 2,
-    learning_rate: float = 2e-4,
+    train_batch_size: int = CONFIG.train_batch_size,
+    eval_batch_size: int = CONFIG.eval_batch_size,
+    gradient_accumulation_steps: int = CONFIG.gradient_accumulation_steps,
+    learning_rate: float = 1e-4,
     logging_steps: int = 10,
     validation_every_epochs: int = 1,
     log_every_epochs: int = 1,
     run_name: str | None = None,
     report_to_wandb: bool = True,
     seed: int = CONFIG.seed,
-) -> ExperimentTrainingArguments:
+) -> TrainingArguments:
     """Create infrastructure arguments that stay identical across experiments."""
     if max_steps is not None and (
         isinstance(max_steps, bool) or not isinstance(max_steps, int) or max_steps <= 0
@@ -86,18 +87,28 @@ def build_training_arguments(
 
     use_cuda = torch.cuda.is_available()
     use_bf16 = cuda_supports_native_bf16(torch)
-    return ExperimentTrainingArguments(
+    arguments = TrainingArguments(
         output_dir=str(output_dir),
         num_train_epochs=num_train_epochs,
         max_steps=max_steps if max_steps is not None else -1,
         per_device_train_batch_size=train_batch_size,
         per_device_eval_batch_size=eval_batch_size,
         gradient_accumulation_steps=gradient_accumulation_steps,
+        dataloader_drop_last=CONFIG.drop_incomplete_train_batch,
         gradient_checkpointing=True,
         gradient_checkpointing_kwargs={"use_reentrant": False},
         learning_rate=learning_rate,
-        lr_scheduler_type="cosine",
-        warmup_ratio=0.03,
+        lr_scheduler_type="reduce_lr_on_plateau",
+        lr_scheduler_kwargs={
+            "mode": "min",
+            "factor": 0.5,
+            "patience": 3,
+            "threshold": 0.005,
+            "threshold_mode": "rel",
+            "cooldown": 0,
+            "min_lr": 1e-5,
+        },
+        warmup_ratio=0.0,
         weight_decay=0.01,
         max_grad_norm=1.0,
         logging_strategy="steps",
@@ -119,9 +130,12 @@ def build_training_arguments(
         remove_unused_columns=False,
         report_to=["wandb"] if report_to_wandb else "none",
         run_name=run_name,
-        validation_every_epochs=validation_every_epochs,
-        log_every_epochs=log_every_epochs,
     )
+    arguments.validation_every_epochs = validation_every_epochs
+    arguments.log_every_epochs = log_every_epochs
+    arguments.early_stopping_patience = 6
+    arguments.early_stopping_threshold = 1e-3
+    return arguments
 
 
 def build_training_trainer(
@@ -129,14 +143,14 @@ def build_training_trainer(
     model: torch.nn.Module,
     dataset: DatasetDict,
     tokenizer: Any,
-    training_arguments: ExperimentTrainingArguments,
-    experiment_plan: ExperimentPlan,
+    training_arguments: TrainingArguments,
+    experiment: dict[str, Any],
     callbacks: list[TrainerCallback] | None = None,
 ) -> MathConsistencyTrainer:
     """Build the single Trainer used by every implemented loss recipe."""
     validate_tokenized_dataset(
         dataset,
-        required_columns=experiment_plan.required_columns,
+        required_columns=BASE_MODEL_COLUMNS | frozenset(experiment["features"]),
     )
     if tokenizer.pad_token_id is None:
         raise ValueError("The tokenizer must define pad_token_id.")
@@ -145,15 +159,22 @@ def build_training_trainer(
         args=training_arguments,
         train_dataset=dataset["train"],
         eval_dataset=dataset["validation"],
-        data_collator=CompletionOnlyDataCollator(pad_token_id=tokenizer.pad_token_id),
+        data_collator=partial(
+            collate_completion_only,
+            pad_token_id=tokenizer.pad_token_id,
+        ),
         processing_class=tokenizer,
-        objective=build_objective(experiment_plan.config),
-        experiment_plan=experiment_plan,
+        losses=experiment["losses"],
+        head_names=frozenset(experiment["heads"]),
         callbacks=[
             StructuredLoggingCallback(),
             EpochIntervalCallback(
                 validation_every_epochs=(training_arguments.validation_every_epochs),
                 log_every_epochs=training_arguments.log_every_epochs,
+            ),
+            EarlyStoppingCallback(
+                early_stopping_patience=(training_arguments.early_stopping_patience),
+                early_stopping_threshold=(training_arguments.early_stopping_threshold),
             ),
             *(callbacks or []),
         ],

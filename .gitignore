@@ -18,6 +18,10 @@ tests/*
 !tests/test_math_parser.py
 !tests/test_graph_builder.py
 !tests/test_postfix_program.py
+!tests/test_training_data.py
+!tests/test_training_features.py
+!tests/test_training_objective.py
+!tests/test_training_schedule.py
 
 # Generated datasets and experiment outputs.
 /data/

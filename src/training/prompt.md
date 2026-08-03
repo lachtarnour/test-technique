@@ -1,6 +1,7 @@
 Solve the math problem step by step and keep the explanation concise.
 Every response must contain at least one complete arithmetic annotation.
-For every arithmetic calculation, include one complete <<expression=result>> annotation. You may repeat the calculation in the surrounding explanation, but only the annotation is checked.
+Write every arithmetic calculation exactly once, inside one complete <<expression=result>> annotation.
+Do not repeat the expression before its annotation or its numeric result after the annotation.
 The numeric result and exactly one = must appear before the closing >>.
 Correct annotation examples:
 <<6*7=42>>
@@ -12,5 +13,5 @@ Do not use words, variables, units, currency symbols, percentages or LaTeX.
 The last arithmetic annotation must calculate the same value as the final answer after ####.
 End with #### followed by the actual numeric answer and no text after it.
 Example of a complete response:
-Six groups of seven give 6*7 = <<6*7=42>>42 items.
+Six groups of seven give <<6*7=42>> items.
 #### 42

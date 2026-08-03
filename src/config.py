@@ -20,8 +20,15 @@ class Config:
     required_columns: frozenset[str] = frozenset({"question", "answer"})
     validation_size: float = 0.15
     dataset_path: str = "data/gsm8k_train_validation15_test_seed42"
+    num_train_epochs: float = 30.0
+    train_batch_size: int = 24
+    gradient_accumulation_steps: int = 3
+    drop_incomplete_train_batch: bool = True
+    eval_batch_size: int = 32
+    periodic_eval_batch_size: int = 300
+    generation_batch_size: int = 300
     max_new_tokens: int = 768
-    prompt_version: str = "2.3.0"
+    prompt_version: str = "2.4.0"
     prompt_path: Path = Path(__file__).resolve().parent / "training" / "prompt.md"
 
     @cached_property

@@ -7,13 +7,17 @@ import torch
 
 import src.model.tokenizer as tokenizer_module
 from src.config import CONFIG
+from src.data.features import TOKEN_LOSS_WEIGHTS
 from src.data.language.formatting import format_training_example
 from src.evaluation.answers import extract_final_answer
 from src.evaluation.arithmetic import parse_annotated_formulas
 from src.model import factory
+from src.training.objective import compile_experiment
 
 
 def test_model_forward(monkeypatch: Any) -> None:
+    captured: dict[str, Any] = {}
+
     class TinyCausalModel(torch.nn.Module):
         def __init__(self) -> None:
             super().__init__()
@@ -29,16 +33,24 @@ def test_model_forward(monkeypatch: Any) -> None:
         "from_pretrained",
         lambda *_args, **_kwargs: backbone,
     )
-    monkeypatch.setattr(factory, "get_peft_model", lambda model, _config: model)
+
+    def fake_get_peft_model(model: Any, config: Any) -> Any:
+        captured["config"] = config
+        return model
+
+    monkeypatch.setattr(factory, "get_peft_model", fake_get_peft_model)
 
     model = factory.build_language_model(
         model_name="tiny-test-model",
         model_loading_kwargs={"dtype": torch.float32},
+        lora_r=16,
     )
     outputs = model(input_ids=torch.tensor([[1, 2, 3]]))
 
     assert outputs.logits.shape == (1, 3, 8)
     assert model.config.use_cache is False
+    assert captured["config"].r == 16
+    assert captured["config"].lora_alpha == 32
 
 
 def test_tokenizer_loader(monkeypatch: Any) -> None:
@@ -105,5 +117,23 @@ def test_mock_question_uses_the_frozen_prompt() -> None:
         {"role": "user", "content": "What is 2 + 3?"},
     ]
     assert formatted["completion"] == [
-        {"role": "assistant", "content": "Add <<2+3=5>>5.\n#### 5"}
+        {"role": "assistant", "content": "Add <<2+3=5>>.\n#### 5"}
     ]
+
+
+def test_a1_compiles_without_configuration_classes() -> None:
+    assert compile_experiment("A1") == {
+        "id": "A1",
+        "losses": {"language": 1.0},
+        "features": [],
+        "heads": [],
+        "math_token_weight": 1.0,
+    }
+
+
+def test_a2_weighted_cross_entropy_is_available() -> None:
+    experiment = compile_experiment("A2", require_implemented=True)
+
+    assert experiment["losses"] == {"language:math": 1.0}
+    assert experiment["features"] == [TOKEN_LOSS_WEIGHTS]
+    assert experiment["math_token_weight"] == 2.0

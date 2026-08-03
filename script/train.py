@@ -30,21 +30,18 @@ from src.tracking import (
     initialize_wandb_run,
     log_wandb_metrics,
 )
-from src.training.arguments import load_experiment_config
 from src.training.factory import (
     build_training_arguments,
     build_training_trainer,
-    validate_tokenized_dataset,
 )
+from src.training.objective import ABLATIONS, compile_experiment
 from src.training.periodic_evaluation import (
-    PERIODIC_EVAL_BATCH_SIZE,
     PERIODIC_EVAL_SAMPLES_PER_SPLIT,
     PERIODIC_EVAL_SEED,
     PeriodicGenerationEvaluationCallback,
     load_fixed_periodic_evaluation_datasets,
     periodic_evaluation_metadata,
 )
-from src.training.plan import compile_experiment
 from src.training.trainer import release_training_memory
 
 # Command-line contract
@@ -55,12 +52,19 @@ def parse_args() -> argparse.Namespace:
         description="Fine-tune a declarative LoRA reasoning experiment."
     )
     parser.add_argument(
-        "--config",
-        type=Path,
-        default=Path("configs/a1_control.json"),
-        help="Scientific experiment configuration.",
+        "--ablation",
+        choices=tuple(ABLATIONS),
+        default="A1",
+        help="Training recipe; A0 and A8 belong to evaluation.",
     )
+    parser.add_argument("--math-token-weight", type=positive_float, default=2.0)
     parser.add_argument("--model-name", default=CONFIG.model_name)
+    parser.add_argument(
+        "--lora-r",
+        type=positive_int,
+        default=8,
+        help="LoRA rank; lora_alpha is set automatically to 2 * rank.",
+    )
     parser.add_argument(
         "--output-dir",
         type=Path,
@@ -90,28 +94,44 @@ def parse_args() -> argparse.Namespace:
         type=positive_int,
         default=CONFIG.max_new_tokens,
     )
-    parser.add_argument("--num-train-epochs", type=positive_float, default=3.0)
+    parser.add_argument(
+        "--num-train-epochs",
+        type=positive_float,
+        default=CONFIG.num_train_epochs,
+    )
     parser.add_argument(
         "--max-steps",
         type=positive_int,
         default=None,
         help="Optional optimizer-step limit; overrides num-train-epochs.",
     )
-    parser.add_argument("--train-batch-size", type=positive_int, default=24)
-    parser.add_argument("--eval-batch-size", type=positive_int, default=16)
-    parser.add_argument("--generation-batch-size", type=positive_int, default=300)
+    parser.add_argument(
+        "--train-batch-size",
+        type=positive_int,
+        default=CONFIG.train_batch_size,
+    )
+    parser.add_argument(
+        "--eval-batch-size",
+        type=positive_int,
+        default=CONFIG.eval_batch_size,
+    )
+    parser.add_argument(
+        "--generation-batch-size",
+        type=positive_int,
+        default=CONFIG.generation_batch_size,
+    )
     parser.add_argument(
         "--periodic-eval-batch-size",
         type=positive_int,
-        default=PERIODIC_EVAL_BATCH_SIZE,
+        default=CONFIG.periodic_eval_batch_size,
         help="Batch size for fixed periodic generation evaluation.",
     )
     parser.add_argument(
         "--gradient-accumulation-steps",
         type=positive_int,
-        default=2,
+        default=CONFIG.gradient_accumulation_steps,
     )
-    parser.add_argument("--learning-rate", type=positive_float, default=2e-4)
+    parser.add_argument("--learning-rate", type=positive_float, default=1e-4)
     parser.add_argument(
         "--logging-steps",
         type=positive_int,
@@ -174,30 +194,6 @@ def _json_safe(metrics: dict[str, Any]) -> dict[str, Any]:
     return cleaned
 
 
-def _cuda_memory_metrics() -> dict[str, int | float] | None:
-    """Return exact process-level CUDA peaks for the complete training run."""
-    if not torch.cuda.is_available():
-        return None
-
-    torch.cuda.synchronize()
-    device = torch.cuda.current_device()
-    total_bytes = torch.cuda.get_device_properties(device).total_memory
-    peak_allocated_bytes = torch.cuda.max_memory_allocated(device)
-    peak_reserved_bytes = torch.cuda.max_memory_reserved(device)
-    gibibyte = 1024**3
-    return {
-        "device_index": device,
-        "total_bytes": total_bytes,
-        "peak_allocated_bytes": peak_allocated_bytes,
-        "peak_reserved_bytes": peak_reserved_bytes,
-        "total_gib": total_bytes / gibibyte,
-        "peak_allocated_gib": peak_allocated_bytes / gibibyte,
-        "peak_reserved_gib": peak_reserved_bytes / gibibyte,
-        "peak_reserved_fraction": peak_reserved_bytes / total_bytes,
-        "headroom_gib": (total_bytes - peak_reserved_bytes) / gibibyte,
-    }
-
-
 # Training workflow
 
 
@@ -206,13 +202,14 @@ def main() -> None:
     disable_progress_bars()
     if args.require_cuda and not torch.cuda.is_available():
         raise RuntimeError("CUDA is required, but no CUDA GPU is available.")
-    if torch.cuda.is_available():
-        torch.cuda.reset_peak_memory_stats()
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    experiment_config = load_experiment_config(args.config)
-    experiment_plan = compile_experiment(experiment_config)
-    wandb_run_name = args.wandb_run_name or experiment_config.experiment_id
+    experiment = compile_experiment(
+        args.ablation,
+        math_token_weight=args.math_token_weight,
+        require_implemented=True,
+    )
+    wandb_run_name = args.wandb_run_name or experiment["id"]
     wandb_run = initialize_wandb_run(
         project=args.wandb_project,
         run_name=wandb_run_name,
@@ -220,10 +217,10 @@ def main() -> None:
         mode=args.wandb_mode,
         config={
             "model_name": args.model_name,
+            "lora_r": args.lora_r,
+            "lora_alpha": 2 * args.lora_r,
             "wandb_run_name": wandb_run_name,
-            "experiment": experiment_config.to_dict(),
-            "experiment_plan": experiment_plan.to_dict(),
-            "experiment_config_file": str(args.config),
+            "experiment": experiment,
             "data_dir": str(args.data_dir),
             "max_length": args.max_length,
             "max_new_tokens": args.max_new_tokens,
@@ -234,6 +231,7 @@ def main() -> None:
             "generation_batch_size": args.generation_batch_size,
             "periodic_eval_batch_size": args.periodic_eval_batch_size,
             "gradient_accumulation_steps": args.gradient_accumulation_steps,
+            "drop_incomplete_train_batch": CONFIG.drop_incomplete_train_batch,
             "learning_rate": args.learning_rate,
             "logging_steps": args.logging_steps,
             "validation_every_epochs": args.validation_every_epochs,
@@ -256,10 +254,8 @@ def main() -> None:
         train_subset_size=args.train_subset_size,
         validation_subset_size=args.validation_subset_size,
         seed=args.seed,
-    )
-    validate_tokenized_dataset(
-        dataset,
-        required_columns=experiment_plan.required_columns,
+        feature_columns=experiment["features"],
+        math_token_weight=experiment["math_token_weight"],
     )
     periodic_evaluation_datasets = load_fixed_periodic_evaluation_datasets(
         args.data_dir
@@ -278,7 +274,8 @@ def main() -> None:
         )
     model = build_language_model(
         model_name=args.model_name,
-        head_names=experiment_plan.head_names,
+        head_names=frozenset(experiment["heads"]),
+        lora_r=args.lora_r,
     )
     model_dtype = str(next(model.parameters()).dtype)
     training_arguments = build_training_arguments(
@@ -296,6 +293,18 @@ def main() -> None:
         report_to_wandb=wandb_run is not None,
         seed=args.seed,
     )
+    optimization_configuration = {
+        "lr_scheduler_type": training_arguments.lr_scheduler_type.value,
+        "lr_scheduler_kwargs": training_arguments.lr_scheduler_kwargs,
+        "warmup_ratio": training_arguments.warmup_ratio,
+        "early_stopping_patience": (training_arguments.early_stopping_patience),
+        "early_stopping_threshold": (training_arguments.early_stopping_threshold),
+    }
+    if wandb_run is not None:
+        wandb_run.config.update(
+            {"optimization": optimization_configuration},
+            allow_val_change=True,
+        )
     periodic_evaluation_callback = PeriodicGenerationEvaluationCallback(
         datasets=periodic_evaluation_datasets,
         tokenizer=tokenizer,
@@ -306,7 +315,7 @@ def main() -> None:
     )
     trainer = build_training_trainer(
         model=model,
-        experiment_plan=experiment_plan,
+        experiment=experiment,
         dataset=dataset,
         tokenizer=tokenizer,
         training_arguments=training_arguments,
@@ -338,14 +347,10 @@ def main() -> None:
             "split": "validation",
         },
     )
-    cuda_memory = _cuda_memory_metrics()
-
     report = {
         "model": args.model_name,
-        "method": f"{experiment_config.experiment_id} LoRA SFT",
-        "experiment": experiment_config.to_dict(),
-        "experiment_plan": experiment_plan.to_dict(),
-        "experiment_config_file": str(args.config),
+        "method": f"{experiment['id']} LoRA SFT",
+        "experiment": experiment,
         "prompt": {
             "version": CONFIG.prompt_version,
             "sha256": CONFIG.system_prompt_sha256,
@@ -358,6 +363,8 @@ def main() -> None:
         "generation_evaluation_split": "validation",
         "evaluation_examples": len(evaluation_dataset),
         "hyperparameters": {
+            "lora_r": args.lora_r,
+            "lora_alpha": 2 * args.lora_r,
             "max_length": args.max_length,
             "max_new_tokens": args.max_new_tokens,
             "num_train_epochs": args.num_train_epochs,
@@ -367,7 +374,9 @@ def main() -> None:
             "generation_batch_size": args.generation_batch_size,
             "periodic_eval_batch_size": args.periodic_eval_batch_size,
             "gradient_accumulation_steps": args.gradient_accumulation_steps,
+            "drop_incomplete_train_batch": CONFIG.drop_incomplete_train_batch,
             "learning_rate": args.learning_rate,
+            **optimization_configuration,
             "logging_steps": args.logging_steps,
             "validation_every_epochs": args.validation_every_epochs,
             "log_every_epochs": args.log_every_epochs,
@@ -386,7 +395,6 @@ def main() -> None:
             for key, value in evaluation_results.items()
             if key != "predictions"
         },
-        "cuda_memory": cuda_memory,
         "predictions": evaluation_results["predictions"],
     }
     report_path = args.output_dir / "fine_tuned_results.json"
@@ -398,14 +406,13 @@ def main() -> None:
     log_wandb_metrics(
         wandb_run,
         model_name=args.model_name,
-        experiment_name=experiment_config.experiment_id,
+        experiment_name=experiment["id"],
         metrics={
             "train_final": report["train_metrics"],
             "validation_final": report["validation_metrics"],
             "generation_evaluation": select_evaluation_metrics(
                 report["generation_evaluation"]
             ),
-            "cuda_memory": report["cuda_memory"] or {},
         },
     )
     finish_wandb_run(wandb_run)

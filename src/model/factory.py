@@ -26,8 +26,12 @@ def build_language_model(
     model_name: str = CONFIG.model_name,
     model_loading_kwargs: dict[str, Any] | None = None,
     head_names: frozenset[str] = frozenset(),
+    lora_r: int = 8,
 ) -> PeftModel:
     """Load the backbone, register heads, then attach LoRA safely."""
+    if isinstance(lora_r, bool) or not isinstance(lora_r, int) or lora_r <= 0:
+        raise ValueError("lora_r must be a strictly positive integer.")
+
     loading_kwargs = dict(model_loading_kwargs or {})
     loading_kwargs.setdefault("dtype", training_model_dtype(torch))
     language_model = AutoModelForCausalLM.from_pretrained(
@@ -52,8 +56,9 @@ def build_language_model(
     return get_peft_model(
         language_model,
         LoraConfig(
-            r=8,
-            lora_alpha=16,
+            r=lora_r,
+            # Preserve the existing alpha/r = 2 scaling when rank changes.
+            lora_alpha=2 * lora_r,
             lora_dropout=0.05,
             target_modules="all-linear",
             exclude_modules=auxiliary_module_names or None,

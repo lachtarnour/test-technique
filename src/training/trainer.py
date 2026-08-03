@@ -8,17 +8,24 @@ import torch
 from transformers import Trainer
 
 from src.model.heads import get_auxiliary_heads
-from src.training.arguments import LANGUAGE_LOSS
 from src.training.objective import (
-    LossStatistics,
-    ObjectiveContext,
-    ObjectiveModelOutputs,
     ScalarNormalizer,
-    TrainingObjective,
+    compute_objective,
+    normalization_counts,
 )
-from src.training.plan import ExperimentPlan
 
 _MODEL_INPUTS = frozenset({"input_ids", "attention_mask"})
+_GIBIBYTE = 1024**3
+
+
+def _current_cuda_memory_metrics() -> dict[str, float]:
+    """Return the process allocator state without synchronizing the GPU."""
+    if not torch.cuda.is_available():
+        return {}
+    return {
+        "gpu_memory_allocated_gib": torch.cuda.memory_allocated() / _GIBIBYTE,
+        "gpu_memory_reserved_gib": torch.cuda.memory_reserved() / _GIBIBYTE,
+    }
 
 
 def release_training_memory(trainer: Trainer) -> None:
@@ -48,16 +55,14 @@ class MathConsistencyTrainer(Trainer):
     def __init__(
         self,
         *args: Any,
-        objective: TrainingObjective,
-        experiment_plan: ExperimentPlan | None = None,
+        losses: dict[str, float],
+        head_names: frozenset[str] = frozenset(),
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
-        self.objective = objective
-        self.needs_last_hidden_state = (
-            experiment_plan.needs_last_hidden_state if experiment_plan else False
-        )
-        self.head_names = experiment_plan.head_names if experiment_plan else frozenset()
+        self.losses = dict(losses)
+        self.head_names = head_names
+        self.needs_last_hidden_state = bool(head_names)
         self.model_accepts_loss_kwargs = True
         self.label_names = ["labels"]
         self._training_normalizers: dict[str, ScalarNormalizer] = {}
@@ -67,11 +72,20 @@ class MathConsistencyTrainer(Trainer):
             dict[str, tuple[torch.Tensor, torch.Tensor]],
         ] = {"train": {}, "eval": {}}
 
+    def get_eval_dataloader(self, eval_dataset: Any | None = None) -> Any:
+        """Keep every validation example even when train drops its remainder."""
+        original_drop_last = self.args.dataloader_drop_last
+        self.args.dataloader_drop_last = False
+        try:
+            return super().get_eval_dataloader(eval_dataset)
+        finally:
+            self.args.dataloader_drop_last = original_drop_last
+
     def _record_component_statistics(
         self,
         *,
         phase: str,
-        statistics: dict[str, LossStatistics],
+        statistics: dict[str, tuple[torch.Tensor, torch.Tensor]],
     ) -> None:
         """Accumulate additive statistics without retaining autograd graphs."""
         all_statistics = getattr(self, "_component_statistics", None)
@@ -79,9 +93,9 @@ class MathConsistencyTrainer(Trainer):
             all_statistics = {"train": {}, "eval": {}}
             self._component_statistics = all_statistics
         phase_statistics = all_statistics[phase]
-        for name, values in statistics.items():
-            numerator = values.numerator.detach()
-            denominator = values.denominator.detach()
+        for name, (numerator, denominator) in statistics.items():
+            numerator = numerator.detach()
+            denominator = denominator.detach()
             previous = phase_statistics.get(name)
             if previous is not None:
                 numerator = previous[0] + numerator
@@ -92,7 +106,7 @@ class MathConsistencyTrainer(Trainer):
     def _forward_with_last_hidden_state(
         model: torch.nn.Module,
         model_inputs: dict[str, Any],
-    ) -> tuple[Any, ObjectiveModelOutputs]:
+    ) -> tuple[Any, dict[str, torch.Tensor]]:
         """Capture the final hidden state without retaining every layer."""
         get_output_embeddings = getattr(model, "get_output_embeddings", None)
         if not callable(get_output_embeddings):
@@ -124,10 +138,10 @@ class MathConsistencyTrainer(Trainer):
             handle.remove()
         if not captured:
             raise RuntimeError("The model forward did not invoke its lm_head.")
-        return raw_outputs, ObjectiveModelOutputs(
-            logits=raw_outputs.logits,
-            last_hidden_state=captured[-1],
-        )
+        return raw_outputs, {
+            "logits": raw_outputs.logits,
+            "last_hidden_state": captured[-1],
+        }
 
     def _consume_component_metrics(self, phase: str) -> dict[str, float]:
         """Return globally reduced component means and clear the phase."""
@@ -166,6 +180,8 @@ class MathConsistencyTrainer(Trainer):
         prefix = "eval_" if is_evaluation else ""
         for name, value in self._consume_component_metrics(phase).items():
             logs.setdefault(f"{prefix}{name}", value)
+        if not is_evaluation:
+            logs.update(_current_cuda_memory_metrics())
         super().log(logs, start_time=start_time)
 
     def _get_num_items_in_batch(
@@ -174,7 +190,7 @@ class MathConsistencyTrainer(Trainer):
         device: torch.device,
     ) -> torch.Tensor | int | None:
         """Compute one exact normalizer per loss over the accumulation window."""
-        normalizers = self.objective.normalization_counts(batch_samples)
+        normalizers = normalization_counts(self.losses, batch_samples)
         if not normalizers:
             return super()._get_num_items_in_batch(batch_samples, device)
 
@@ -182,7 +198,10 @@ class MathConsistencyTrainer(Trainer):
             name: self._globalize_normalizer(value, device=device)
             for name, value in normalizers.items()
         }
-        language_count = self._training_normalizers.get(LANGUAGE_LOSS)
+        language_name = next(
+            name for name in self.losses if name.startswith("language")
+        )
+        language_count = self._training_normalizers.get(language_name)
         if isinstance(language_count, (int, torch.Tensor)):
             return language_count
         return None
@@ -202,7 +221,7 @@ class MathConsistencyTrainer(Trainer):
         if self.args.average_tokens_across_devices and self.args.world_size >= 1:
             count = self.accelerator.gather(count).sum()
         elif self.args.n_gpu >= 1:
-            count = count // self.args.n_gpu
+            count = count / self.args.n_gpu
 
         if self.args.n_gpu > 1 and count.dim() == 0:
             count = count.unsqueeze(0).expand(self.args.n_gpu, -1)
@@ -212,7 +231,7 @@ class MathConsistencyTrainer(Trainer):
             None,
         )
         if parallelism_config is not None:
-            count = count // parallelism_config.non_data_parallel_size
+            count = count / parallelism_config.non_data_parallel_size
         return count
 
     def _count_evaluation_normalizers(
@@ -234,7 +253,7 @@ class MathConsistencyTrainer(Trainer):
             stop = min(start + 1024, example_count)
             rows = [dataset[index] for index in range(start, stop)]
             batch = {key: [row[key] for row in rows] for key in rows[0]}
-            counts = self.objective.normalization_counts([batch])
+            counts = normalization_counts(self.losses, [batch])
             for name, value in counts.items():
                 scalar = (
                     value.detach().item()
@@ -292,7 +311,7 @@ class MathConsistencyTrainer(Trainer):
             )
         else:
             outputs = model(**model_inputs)
-            objective_outputs = outputs
+            objective_outputs = {"logits": outputs.logits}
         head_names = getattr(self, "head_names", frozenset())
         auxiliary_heads = get_auxiliary_heads(model, head_names)
         is_training = model.training
@@ -300,7 +319,10 @@ class MathConsistencyTrainer(Trainer):
             dict(getattr(self, "_training_normalizers", {})) if is_training else {}
         )
         if num_items_in_batch is not None:
-            normalizers.setdefault(LANGUAGE_LOSS, num_items_in_batch)
+            language_name = next(
+                name for name in self.losses if name.startswith("language")
+            )
+            normalizers.setdefault(language_name, num_items_in_batch)
         evaluation_normalizers_per_example = getattr(
             self,
             "_evaluation_normalizers_per_example",
@@ -311,19 +333,17 @@ class MathConsistencyTrainer(Trainer):
                 name: inputs["labels"].shape[0] * per_example
                 for name, per_example in (evaluation_normalizers_per_example.items())
             }
-        loss_output = self.objective.compute_loss(
+        total_loss, statistics = compute_objective(
+            self.losses,
             model_outputs=objective_outputs,
             batch=inputs,
-            context=ObjectiveContext(
-                normalizers=normalizers,
-                auxiliary_heads=auxiliary_heads,
-            ),
+            normalizers=normalizers,
+            auxiliary_heads=auxiliary_heads,
         )
         self._record_component_statistics(
             phase="train" if is_training else "eval",
-            statistics=loss_output.statistics,
+            statistics=statistics,
         )
-        total_loss = loss_output.total_loss
         if (
             is_training
             and num_items_in_batch is not None

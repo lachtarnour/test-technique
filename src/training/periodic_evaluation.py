@@ -19,7 +19,6 @@ from src.evaluation.diagnostics import select_evaluation_metrics
 from src.evaluation.runners import evaluate_model
 
 PERIODIC_EVAL_SAMPLES_PER_SPLIT = 300
-PERIODIC_EVAL_BATCH_SIZE = 300
 PERIODIC_EVAL_SEED = CONFIG.seed
 PERIODIC_EVAL_SPLITS = ("train", "validation")
 
